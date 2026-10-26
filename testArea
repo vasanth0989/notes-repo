@@ -1,0 +1,253 @@
+# ADR-0003 update: direct submission to OPF (Capabilities 2, 3 and 10)
+
+Story ENTPMTS-144880. Architecture decision of 2026-10-23: Wire II and Submit Request to OPF API are combined into one service, `bank-wire-ii-api`. There is no SQS between them and no MQ from OPF. PayX retries. The idempotency key comes from upstream (the UETR) and is passed to FIS unchanged. Wire II sends the final status to PayX by an API call. Capability 2 covers only the OPF API registration and connection.
+
+## What changes, at a glance
+
+| Page | Section | Change |
+|---|---|---|
+| Capability 2 | Decision: first paragraph | Wire II is named as the caller |
+| Capability 2 | Decision: Responses table, row 202 | Pain.002 over MQ removed |
+| Capability 2 | Decision: "What the spec resolves" | UETR and idempotency key resolved; MQ removed |
+| Capability 2 | Implications, first bullet | Submission moves into the Wire II service; Capability 2 is registration and connection only |
+| Capability 2 | Outstanding Questions | Six items marked resolved, four questions added |
+| Capability 2 | Diagram | Two service boxes and one lane renamed (Lucid) |
+| Capability 2 | Annual Update table | Row 1.1 added |
+| Capability 10 | Decision: step 4 note, new steps 6 and 7 | One service; error mapping; status call to PayX |
+| Capability 10 | End-to-end flow | Sequence redrawn without the Submit Request column |
+| Capability 10 | Justification/Rationale | Rewritten |
+| Capability 10 | Implications | SQS bullet and "Cannot be deferred" bullet replaced |
+| Capability 10 | Detail: "What actually needs work", UETR bullet | UETR comes from upstream |
+| Capability 3 | Whole page | Rewritten: same capability, now a component of the Wire II service |
+| ADR-0003 main page | Section 4b summary table, rows Cap 3 and Cap 10 | SQS wording removed |
+
+---
+
+## Capability 2 (OPF API integration)
+
+### Decision: first paragraph
+
+**Replace**
+> Once a payment initiation request goes through the required stages successfully in Payment Exchange (i.e. OFAC, BIC/ABA enrichment, FX integration), Payment Exchange will call the FIS-hosted "Enterprise Payments: POM Customer Credit Transfer Initiation" API with a JSON pain.001.001.11 to initiate the payment in OPF for further processing and delivery to correspondent banks.
+
+**With**
+> Once a payment initiation request goes through the required stages successfully in Payment Exchange (i.e. OFAC, BIC/ABA enrichment, FX integration), the Wire II service (`bank-wire-ii-api`, Capability 10) calls the FIS-hosted "Enterprise Payments: POM Customer Credit Transfer Initiation" API with a JSON pain.001.001.11 to initiate the payment in OPF for further processing and delivery to correspondent banks. This capability covers the registration of that API and the connection to it; the call itself is made by the Wire II service.
+
+### Decision: Responses table, row 202
+
+**Replace**
+> Accepted for processing (asynchronous, no content) — the outcome returns later, today via a pain.002 over MQ.
+
+**With**
+> Accepted for processing (no content). In Phase 1 this is the outcome Payment Exchange records: no pain.002 is received, because the MQ status feed from OPF is not being built. Correspondent-bank acknowledgements stay in OPF.
+
+### Decision: "What the spec resolves"
+
+**Replace the paragraph with**
+> **What the spec resolves:** the API takes an `idempotency-key` header plus a `uuid` interaction id. The idempotency key is the UETR generated upstream by the Payment Network Gateway, and the same value is passed to FIS, so a retried payment cannot be processed twice. Access is OAuth 2.0 client-credentials over CodeConnect. The call returns 202 on acceptance, or one of the synchronous error codes above. No pain.002 or MQ path is used in Phase 1. BAN encryption is not handled by this contract: it carries plaintext/tokenized account data, so protection in transit relies on the CodeConnect channel (still pending with FIS).
+
+### Implications, first bullet
+
+**Replace**
+> This capability covers the connection to the OPF API — establishing, securing, and cataloguing the integration. Generating the pain.001.001.11 JSON is Capability 10 (Wire II), and submitting each payment is Capability 3 (Submit Request to OPF API).
+
+**With**
+> This capability covers only the registration of the OPF API and the connection to it: establishing, securing and cataloguing the integration. Generating the pain.001.001.11 JSON (Capability 10) and submitting each payment and handling its response (Capability 3) are both done by the Wire II service, `bank-wire-ii-api`.
+
+The other Implications bullets are unchanged.
+
+### Outstanding Questions
+
+Edit these existing items:
+
+| Existing item | Change to |
+|---|---|
+| If fail during processing, those failures come back via MQ (pain.002 payment status report) - Pending response from FIS | **Resolved:** no MQ status feed in Phase 1. Synchronous error codes are mapped by the Wire II service and returned to PayX. Processing failures after the 202 stay in OPF. |
+| Should a new ASV be created for OPF integration: either ASVOPF or ASVPAYXEXTERNAL - pending discussion with Tech leadership | **In progress:** a new ASV, Wire II, is going through build and launch readiness for the Wire II service and the OPF API registration. Build in the PIE ASV until it is ready. |
+| UETR vs idempotency-key - can use the same value for each. | **Resolved:** the UETR from the Payment Network Gateway is the idempotency key and is passed to FIS unchanged. |
+| Client ID and secrets - can the secret be rotated in Code Connect? How often? | Keep the question. Add: Sandbox client credentials have been issued and a token minted; production credentials are pending with FIS. |
+| Current pain.002s receiving back: initial "validation" message sent back via file today; not the secondary ACTC nor tertiary ACCC | Add: **Phase 1 does not consume pain.002.** |
+| API - no support on current API, works for BTR/CTR. Pending confirmation from FIS product. | Keep. Add: drawdowns are Capability 21; written confirmation from FIS still outstanding. |
+
+Add these new items (red, pending FIS):
+- Business Application Header `from` / `to` identifiers for Discover: pending from FIS, together with a known-good sample request. Sandbox currently rejects the header.
+- OPF forwards pain.001 V3 to the correspondent banks: which V11-only fields (for example structured addresses) are dropped? Pending from FIS.
+- Does OPF keep the UETR supplied in the request, or overwrite it? Pending from FIS.
+- Payload-level encryption: does Code Connect's payload-encryption key apply to this API? Until FIS answers, TLS-only transport is covered by a UTEP.
+
+### Diagram (Lucid)
+
+- "OPF PayX Integration service" (Payment Exchange lane) → **Wire II service (bank-wire-ii-api)**
+- "OPF Integration service" (ASVOPF lane) → remove it, or merge it into the Wire II box. There is no second service.
+- ASVOPF lane label → **ASV Wire II (pending build readiness)**
+- Arrows: PayX Platform → Wire II service → (pain.001 via API) → OPF.
+
+### Annual Update table: add a row
+
+| Version | Author | Date | Significant Change | Change Made | Reason |
+|---|---|---|---|---|---|
+| 1.1 | Vasanth Senthamaraikannan | 2026-10-26 | Yes | Capability scoped to API registration and connection; submission moved to the Wire II service; pain.002/MQ removed; UETR as idempotency key; outstanding questions updated | Architecture decision of 2026-10-23: direct submission, no SQS, no MQ |
+
+---
+
+## Capability 10 (Wire II — pain.001 generation)
+
+The Problem Statement, Assumptions, Constraints, Alternatives and Technical Debt sections are already correct. Leave them as they are.
+
+### Decision
+
+Replace steps 4 and 5, and add steps 6 and 7. The full list:
+
+> PayX calls Wire II with the payment object. Wire II:
+> 1. Converts the Payment Exchange payment object into an ISO 20022 pain.001.001.11 (V11) message.
+> 2. Converts the pain.001 V11 XML to JSON, since the OPF API accepts JSON only.
+> 3. Saves the transaction record in DynamoDB.
+> 4. **Submits the request directly to the OPF API** (POST /customer-credit-transfer-initiations) with the `uuid` and `idempotency-key` headers; the idempotency key is the UETR received from upstream. Wire II and Submit Request to OPF API (Capability 3) are one service; there is no SQS between them.
+> 5. **Stores the OPF response (202, or the error code) against the transaction record in DynamoDB.**
+> 6. **Returns an acknowledgment to PayX.** On the acknowledgment, PayX produces the .OPFRAIL stage.
+> 7. **Sends the final status to PayX by API call:** accepted (202) → PayX produces .OPFCLEARING; rejected → PayX produces .OPFCLEARING.STOP. Wire II does not retry; PayX retries with the same UETR.
+>
+> Scope is credit-transfer (pain.001) only; pain.008 is Phase 2 scope.
+
+### End-to-end flow
+
+Rename the heading to "End-to-end flow (all steps run in Wire II)" and replace the sequence with:
+
+```
+OPF submission — end-to-end sequence
+
+ PayX                    Wire II (bank-wire-ii-api)              DynamoDB        OPF API
+  |                               |                                  |               |
+  | (1) call (payment object)     |                                  |               |
+  |------------------------------>|                                  |               |
+  |                               | (2) convert Payment Object       |               |
+  |                               |     -> pain.001.001.11 (V11)     |               |
+  |                               |     -> convert XML to JSON       |               |
+  |                               | (3) save txn record              |               |
+  |                               |--------------------------------->|               |
+  |                               | (4) POST pain.001 (JSON)                         |
+  |                               |     headers: uuid, idempotency-key = UETR        |
+  |                               |------------------------------------------------->|
+  |                               | (5) 202 Accepted  |  400 / 401 / 403 / 422 / 5xx |
+  |                               |<-------------------------------------------------|
+  |                               | (6) store ack / nack             |               |
+  |                               |--------------------------------->|               |
+  | (7) acknowledgment            |                                  |               |
+  |<------------------------------|                                  |               |
+  | (8) produce .OPFRAIL          |                                  |               |
+  | (9) final status (API call)   |                                  |               |
+  |<------------------------------|                                  |               |
+  | (10) accepted -> produce .OPFCLEARING                            |               |
+  |      rejected -> produce .OPFCLEARING.STOP                       |               |
+  |      retryable failure -> PayX retries step (1) with the same UETR               |
+```
+
+### Justification/Rationale
+
+**Replace with**
+> OPF's external API accepts pain.001 in JSON only, so submission depends on this generation and format conversion. Wire II submits to the OPF API itself. The architecture review combined Wire II and Submit Request to OPF API into one service, which removes the SQS hop and a second deployable for a transitional path. The transaction record is saved to DynamoDB immediately before submission and the OPF response is stored after it, so the payment state is durable whatever the outcome. Retries stay with PayX, which already owns the payment's state, and the UETR as idempotency key makes a retry safe. Extending the existing v9 converter minimizes the build.
+
+### Implications
+
+**Replace these two bullets**
+> - Output is a JSON pain.001.001.11 placed on SQS and consumed by Capability 3 (Submit Request to OPF API).
+> - Cannot be deferred — Capability 3 depends on it (main ADR §4b item 3 → item 10).
+
+**With**
+> - Output is a JSON pain.001.001.11 posted directly to the OPF API by the same service. Capability 3 (submission and response handling) is a component of this service, not a separate one.
+> - Wire II calls PayX's API with the final status, so it needs a PayX status endpoint and the mapping from OPF response codes to PayX outcomes (see Capability 3).
+> - Wire II owns the DynamoDB transaction table and its access pattern by UETR.
+
+The other two bullets (extends the v9 converter; PayX produces .OPFRAIL on Wire II's acknowledgment) are unchanged.
+
+### Detail: "What actually needs work", UETR bullet
+
+**Replace**
+> UETR. PaymentIdentification6 carries a UUID-v4-patterned UETR that the v9 code does not populate. Confirm whether OPF requires it; if so it must be generated and persisted for traceability.
+
+**With**
+> UETR. PaymentIdentification6 carries a UUID-v4-patterned UETR that the v9 code does not populate. The UETR is generated upstream by the Payment Network Gateway, arrives with the payment and is used as the idempotency key; Wire II populates PaymentIdentification6 with it, never generates one, and persists it on the transaction record. Whether OPF keeps the supplied UETR is pending with FIS.
+
+The rest of the Detail section is unchanged.
+
+---
+
+## Capability 3 (Submit Request to OPF API): full page
+
+Replace the whole page body with this. The title stays the same.
+
+**Problem Statement**
+> After Capability 10 (Wire II) produces a JSON pain.001.001.11, it must be submitted to the FIS OPF API and the outcome sent back to Payment Exchange so the payment can be advanced or stopped.
+
+**Assumptions**
+> - The connection to the OPF API (auth, CodeConnect, firewall, DevExchange registration) is established by Capability 2 (OPF API integration).
+> - Capability 10 (Wire II) produces a valid JSON pain.001.001.11 in the same service.
+> - The UETR received from the Payment Network Gateway is the idempotency key.
+
+**Constraints**
+> - The OPF API returns 202 (no content) on acceptance and synchronous error codes otherwise. No pain.002 over MQ is received in Phase 1.
+> - Each submission carries the required `uuid` and `idempotency-key` headers per the OPF API contract (Capability 2).
+> - Phase 1 only: retired at the full OPF exit (Phase 2).
+
+**Alternatives**
+> - **Submit inline within Wire II (chosen)**
+>   - Pros: one service and one deployable for a transitional path; no queue to run, secure or monitor; the outcome is known while the request is open.
+>   - Cons: a slow OPF call holds the Wire II request; retries depend on PayX.
+> - **A dedicated SQS consumer (rejected by the architecture review)**
+>   - Pros: decoupled and independently retryable.
+>   - Cons: an extra service, a queue and a second boundary for a throwaway path; more to secure and register.
+
+**Decision**
+> Submit Request to OPF API is a component of the Wire II service (`bank-wire-ii-api`), not a separate service. It:
+> 1. Calls the OPF API (POST /customer-credit-transfer-initiations) over the connection established in Capability 2, with the `uuid` header and `idempotency-key` = UETR.
+> 2. Stores the response against the transaction record in DynamoDB.
+> 3. Maps the response to a Payment Exchange outcome:
+>
+> | OPF response | Outcome sent to PayX | PayX stage |
+> |---|---|---|
+> | 202 Accepted | Accepted | .OPFCLEARING |
+> | 400 Bad Request (validation) | Rejected | .OPFCLEARING.STOP |
+> | 422 Idempotent replay with a different payload | Rejected (duplicate UETR, different content) | .OPFCLEARING.STOP |
+> | 401 / 403 | Technical failure (credentials or entitlement); alert | none; PayX may retry after the fix |
+> | 500 / 503, timeout, connection failure | Technical failure, retryable | none; PayX retries with the same UETR |
+>
+> 4. Sends the final status back to Payment Exchange by API call. Wire II does not retry; retries come from PayX.
+>
+> End-to-end flow: see Capability 10. This component's part is steps 4 to 6, 9 and 10.
+
+**Justification/Rationale**
+> The architecture review combined Wire II and Submit Request to OPF API into one service: a separate SQS consumer adds a service, a queue and a security boundary to a path that is retired in Phase 2. Keeping submission in Wire II leaves one owner for the idempotency key, the stored OPF response and the status sent to PayX. PayX already owns the payment's state, so it owns retries; the UETR as idempotency key makes a retry safe at FIS.
+
+**Implications**
+> - Depends on Capability 10 (Wire II) for the JSON pain.001, in the same service, and on Capability 2 for the connection and contract.
+> - Sends the accepted/rejected status to Payment Exchange: accepted → .OPFCLEARING, rejected → .OPFCLEARING.STOP.
+> - Maps OPF's synchronous response codes to a Payment Exchange status. There is no asynchronous pain.002/MQ outcome in Phase 1; bank acknowledgements stay in OPF.
+> - The 202 means "accepted for processing" by OPF, not settled at the bank. Any later failure inside OPF is handled through OPF operations, not through PayX.
+
+**Technical Debt incurred**
+> Transitional: a throwaway submission path, retired at the full OPF exit (Phase 2).
+
+**Annual Update table: add a row**
+
+| Version | Author | Date | Significant Change | Change Made | Reason |
+|---|---|---|---|---|---|
+| 1.1 | Vasanth Senthamaraikannan | 2026-10-26 | Yes | Rewritten for direct submission: component of the Wire II service; SQS and pain.002/MQ removed; response-code mapping added | Architecture decision of 2026-10-23 |
+
+---
+
+## ADR-0003 main page: section 4b capability summary table
+
+| Row | Replace the blurb with |
+|---|---|
+| Capability 10 (Wire II) | Converts the PayX payment object to pain.001.001.11 JSON and submits it directly to the OPF API (no SQS); stores the transaction and the OPF response in DynamoDB; sends the status to PayX by API call. |
+| Capability 3 (Submit Request to OPF API) | Component of the Wire II service: calls the OPF API with the UETR as idempotency key, maps OPF response codes to accepted/rejected and returns the status to PayX. No separate service, no SQS, no MQ. |
+| Capability 2 (OPF API integration) | Registration of the FIS OPF API on DevExchange and the connection to it (auth, CodeConnect, firewall). |
+
+---
+
+## Open points to confirm in the Pod 3 review and with Kaushik
+
+- [ ] Final status: is it returned in Wire II's synchronous response to PayX, or sent by a separate PayX status API call after the acknowledgment? This draft does both: acknowledgment, then a status call.
+- [ ] Response-code mapping table in Capability 3: agree which codes PayX treats as retryable.
+- [ ] On a PayX retry for a UETR already accepted, does Wire II return the stored status without posting to OPF again?
+- [ ] The "PNG" in the decision: confirm it is the Payment Network Gateway and the key is the UETR.
