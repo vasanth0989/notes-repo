@@ -1,64 +1,62 @@
 RESULT 1
-
+ 
 Title (121/200):
 Led End-to-End Bill Pay Migration Architecture and Delivered a Successful Associate Pilot for the Capital One Integration
-
+ 
 Description (993/1000):
 Served as Bill Pay SME and led Discover-side migration architecture and execution for the successful August associate pilot. Developed FIS-to-Fiserv conversion flows, migration-day (MD) timelines, customer segmentation, data-ownership and dry-run plans. Coordinated every DFS-owned activity from MD-8 eBill enrollment restrictions through reconciliation, Bill Pay enrollment shutoff, MD-1 deconversion-file transfers, go/no-go assessment, fallout analysis and Capital One validation. Architected separate BMS controls for Bill Pay access and eBill enrollment, enabling distinct migration timings while preserving access for non-migrating customers. Created diagrams, infographics and team walkthroughs explaining FIS good-funds/risk-based models, unmanaged-payee check flows, debit timing and the three-retry process. Partnered with Discover business teams, FIS and Capital One technology leaders to clarify dependencies, validate designs and translate architecture into coordinated execution.
-
+ 
 Impact (249/250):
 Delivered a successful associate pilot through coordinated Discover-side execution, clear migration controls and cross-company alignment, turning complex Bill Pay architecture into an actionable, repeatable migration plan for the larger waves ahead.
-
+ 
 ----------------------------------------------------------------------
-
+ 
 RESULT 2
-
-Title (153/200):
-Built a Bill Pay Migration Analytics Dashboard Processing 400,000 Records in ~30 Seconds and Advanced Reconciliation Readiness for Scaled Migration Waves
-
-Description (982/1000):
-Independently built a React/Node.js dashboard (AI-assisted development) for in-house analysis of FIS deconversion files instead of relying on Capital One-generated reports. It processes ~400,000 records in ~30 seconds, with views of customers, payees, funding accounts, payment counts, transaction totals and one-time vs. recurring payments, lookup by CIF or name, customer-to-payee-to-payment drill-down, duplicate-payee detection and checking/MMA filters. Reconciled the Bill Pay mega dry run (~200,000 records), identified FIS inconsistencies where MMA funding accounts were classified as checking, determined corrections, supplied account-remapping data and clarified duplicate and account-closure removals. Worked with engineers, FIS and Capital One to define the October 8 MMA shutoff: unenroll MMA-only profiles while removing only MMA accounts, payments and history from mixed profiles, preserving checking activity. Continued readiness for the November customer-pilot wave.
-
-Impact (242/250):
-Delivered 400,000-record analysis in ~30 seconds with customer-to-payment traceability and duplicate detection, and surfaced account-classification gaps with correction data ahead of MMA shutoff, strengthening reconciliation for larger waves.
-
+ 
+Title (185/200):
+Built a Bill Pay Migration Analytics Dashboard Processing 400,000 Records in ~30 Seconds and Saved $20,000 in FIS Cleanup Costs Through Closed-Account Analysis and Automated Remediation
+ 
+Description (997/1000):
+Independently built a React/Node.js dashboard (AI-assisted) analyzing ~400,000 FIS deconversion records in ~30 seconds, replacing Capital One reports: customer/payee/funding-account/payment views, CIF lookup, customer-to-payment drill-down, duplicate-payee detection, checking/MMA filters. Added Snowflake segmentation-feed ingestion (CIF mapping with pie-chart breakdowns) and closed-account analysis for 51,000 funding accounts closed on DFS/Finacle yet still active in FIS (legacy of pre-Kafka-listener manual cleanup). Matching against the customer-pilot population split 860 stale 'none remain' profiles from 473 'accounts remain', narrowing FIS's $20,000 cleanup quote to 473 records. Built a Spring Boot batch in 4-5 hours to resolve FIS funding-account IDs and invoke closure, UAT-tested and run overnight in production. Reconciled the mega dry run (~200,000 records), supplied remapping data for MMA-as-checking errors and defined October 8 MMA shutoff rules preserving checking activity.
+ 
+Impact (241/250):
+Cut 400,000-record analysis to ~30 seconds, narrowed a 51,000-account cleanup to 473 records and closed them via a batch built in hours, saving $20,000 in FIS fees while strengthening reconciliation ahead of the November customer-pilot wave.
+ 
 ----------------------------------------------------------------------
-
+ 
 RESULT 3
-
+ 
 Title (132/200):
 Led Wire Transfer Migration Architecture Analysis and Digital-Channel Readiness Toward the May 2027 Transition Off the DFS Mainframe
-
+ 
 Description (883/1000):
 Represented Outbound Wires in Capital One migration discussions, explaining architecture and integration dependencies. Partnered with Inbound Wires on routing design and evaluated the proposed Excel-to-ISO 20022 pacs conversion for domestic and international scenarios. Led design and implementation for mobile international-wire restrictions, disclosure updates and BMS integration to display the Savers Wave associate-pilot wire maintenance page, translating business and product requirements into technical designs and guiding delivery through production. Began OPF migration architecture with Capital One, assessing the proposed shift from the DFS Monetary Services mainframe and outbound SFTP processing to Payment Exchange APIs and FIS OPF pain.001 submission. This ongoing work establishes the foundation for the planned May 2027 transition away from the DFS-hosted mainframe.
-
+ 
 Impact (237/250):
 Connected outbound and inbound wire expertise to Capital One planning, delivered the required digital-channel controls for the associate pilot, and set the initial architecture direction for replacing DFS mainframe-based wire processing.
-
+ 
 ----------------------------------------------------------------------
-
+ 
 RESULT 4
-
+ 
 Title (166/200):
 Established Reusable Engineering Patterns Across Seven APIs and Accelerated Security Remediation, Closing VulnHunter High-Severity Findings One Week Ahead of Deadline
-
+ 
 Description (999/1000):
 Designed and implemented a standalone WireMock sidecar pattern that removed test-runtime dependencies from production bundles, resolving WireMock-related Nexus IQ findings; adopted across all seven team-owned APIs rather than per-application fixes. Diagnosed a certificate-trust issue in one day (pass-through proxy, so TLS validation needed an application-layer fix), designed a composite trust manager and drove UAT and production deployment across four Bill Pay APIs in three days. Coordinated remediation of VulnHunter high-severity findings across six applications during repository migration: built a reusable re-scan skill, used Claude-assisted analysis for application-level summaries, effort estimates and a shared remediation tracker, guided fix planning, UAT, regression testing and production scheduling, and substantiated DFS-vs-Capital One architectural false positives in daily huddles to get them removed. Also supported the JDK 21/Spring Boot 4.x migration and certificate renewals.
-
+ 
 Impact (241/250):
 Established a reusable pattern across seven APIs, mitigated certificate-transition risk across four APIs in three days, and resolved high-severity findings across six applications one week early while avoiding remediation of false positives.
-
+ 
 ----------------------------------------------------------------------
-
+ 
 RESULT 5
-
+ 
 Title (110/200):
 Co-Delivered NeuroSecure in Two Days, Earning Second Place in a 150-Team Discover and Capital One PD Hackathon
-
+ 
 Description (843/1000):
 Helped take NeuroSecure from an initial idea to a working hackathon application in two days, earning second place among 150 teams from Discover and Capital One. Evaluated our team's candidate ideas against 150-plus submissions and created a decision walkthrough explaining the selected concept's differentiation. Designed the frontend, contributed the multi-shield architecture and helped develop the AI system prompts. The concept combined wearable biometric signals, transaction history, anomaly checks and contextual cues to flag potential scam-driven payments and propose additional verification or intervention before funds leave the customer's account. Worked closely with my director and teammates on implementation, a hero site, presentation materials and demo preparation, translating the concept into a working, judge-ready solution.
-
+ 
 Impact (221/250):
 Earned second place in a 150-team competition and demonstrated rapid cross-functional execution, translating an AI-enabled scam-prevention concept into a working prototype and award-winning demonstration in just two days.
-
-----------------------------------------------------------------------
