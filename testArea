@@ -1,1 +1,5 @@
-Kingshuk is a dependable engineer who knows his application end to end and takes full ownership of what he builds, from design through delivery and support. He produces clean, reliable work on time and handles late changes calmly without compromising quality.
+Teamwork:
+Blake owns the Capital One utility that takes our deconversion files and migrates the data into Fiserv, and he has worked with us as one team throughout the Bill Pay migration. He answers our open questions quickly, calls out any discrepancies his analysis finds so we can address them early, and never hesitates to raise a question or represent Capital One's view in a discussion. His time and effort on the Discover side of the migration are much appreciated, and it has been a pleasure working with and learning from him.
+
+Problem solving:
+Blake gets to the root of an issue rather than working around it. During the associate pilot he stepped in to debug the payment model versus payment instruction issue directly with the FIS partner and drove it to a resolution. In the mega dry run he identified and flagged the duplicate payees in the migration data, which gave our business partners what they needed to decide the right way to handle them before the customer waves. His analysis of every deconversion file consistently surfaces what is off before it becomes a problem for either side.
