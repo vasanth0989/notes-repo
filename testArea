@@ -1,59 +1,11 @@
-Story: Complete the Exchange registration of the FIS OPF API and obtain the security approvals Points: 3
+Leading the Discover side of the Bill Pay migration as SME, I demonstrated Results Focused ownership by taking the August associate pilot from architecture through production, from the conversion flows, migration-day timelines and dry-run plans to running every Discover-owned activity on the day. I drew on strong Teamwork by aligning Discover business teams, FIS and Capital One leaders around one plan and one set of diagrams, while keeping Customer Focus at the center by designing separate controls for Bill Pay access and eBill enrollment, so each could migrate on its own timing without touching customers who were not moving, and by delivering the digital-channel wire restrictions and maintenance page the pilot needed.
 
-Description
+Seeing the team waiting on reports, I demonstrated Innovation and Problem Solving by building an analytics dashboard that turns about 400,000 FIS deconversion records into answers in roughly thirty seconds. I applied Judgment by using it to identify 51,000 funding accounts closed on the Discover side but still active in FIS and to narrow a $20,000 vendor cleanup quote to 473 records, and I showed Results Focused delivery by closing those records with a batch I built in hours and ran overnight in production, while keeping Customer Focus by reconciling the mega dry run and defining the MMA shutoff rules that protected customers from wrong or missing payments on migration day.
 
-The FIS OPF API (POM Customer Credit Transfer Initiation) is an external API consumed by the Wire II service, so it must be registered on Exchange as a third-party API and catalogued as a consumed dependency. The registration has been submitted from the FIS OpenAPI contract; this story carries it through the Cyber and ISO Assurance reviews, records the approved registration against the ASV that will host the Wire II service, and keeps the registered contract in step with the FIS specification version in use.
+Joining the DFS OPF Convergence program as the engineer who knows Discover's wire channels and ways of working, I have demonstrated Influence by becoming the Discover voice in the pod connecting Payment Exchange to FIS OPF ahead of the May 2027 mainframe exit. I show Communication by translating how Discover works into designs Capital One can build, and Judgment by testing assumptions against the FIS platform rather than on paper and pushing for the simplest design that survives the live business, including helping retire a queued submission path that added risk without value. I take Results Focused ownership of the pain.001 generation and OPF submission design and its architecture records, while applying Strategic Thinking by treating the OPF bridge as a step toward direct bank connectivity so that what we build now carries into the next phase.
 
-Acceptance criteria
+Protecting the platforms we still run, I demonstrated Continuous Improvement by designing a standalone WireMock sidecar pattern that removed test-runtime dependencies from production bundles and having it adopted across all seven team-owned APIs rather than fixing each one. I applied Problem Solving by diagnosing a certificate-trust issue in a day and fixing it across four Bill Pay APIs in three, and Risk Management and Teamwork by coordinating the VulnHunter high-severity remediation across six applications, with a shared tracker and daily huddles where my Judgment in substantiating the DFS-versus-Capital One architectural false positives got them removed rather than worked, closing the findings a week ahead of the deadline.
 
-[ ] Third-party API registration for the FIS OPF API is approved on Exchange [ ] Cyber and ISO Assurance reviews are complete and their outcomes recorded on the Capability 2 page [ ] Registered contract matches the FIS specification version the Wire II service is built against [ ] Registration is linked to the hosting ASV and re-pointed when the Wire II ASV is ready [ ] Owner and renewal or re-review conditions for the registration are documented
+In the joint Discover and Capital One hackathon, I showed Innovation and Teamwork by helping take NeuroSecure, an AI-enabled scam-prevention concept, from idea to a working, judge-ready application in two days and second place among 150 teams. I applied Judgment by evaluating our ideas against the field and writing the decision walkthrough, and Results Focused execution by designing the frontend, contributing the multi-shield architecture and helping develop the AI system prompts, with Customer Focus in a concept built to stop scam-driven payments before funds leave the customer's account.
 
-Story: Establish FIS Code Connect connectivity to the OPF sandbox Points: 3
-
-Description
-
-Set up and prove the connection path from Capital One to the FIS OPF sandbox through FIS Code Connect: the Code Connect application and product subscription, OAuth 2.0 client-credentials token acquisition, and a first call to the customer-credit-transfer-initiations endpoint that reaches the OPF backend. Capture the exact token endpoint, scopes, subscription and headers that work, and the identifiers FIS must supply for the business application header, so the Wire II service can be configured from a known-good baseline.
-
-Acceptance criteria
-
-[ ] Code Connect application and subscription to the OPF product exist for the sandbox [ ] OAuth 2.0 client-credentials token is obtained from the sandbox token endpoint [ ] A test request reaches the OPF sandbox backend and the response is captured, success or error [ ] Business application header identifiers and a known-good sample request are obtained from FIS, or the open request is tracked with a date [ ] Working configuration (endpoints, headers, subscription) is documented on the Capability 2 page
-
-Story: Secure the OPF API connection: credentials, transport and data-protection exception Points: 5
-
-Description
-
-Put the OPF API credentials and transport protection on a supportable footing. Client id and secret for each environment are held in the approved secrets store, never in code or configuration files, with a documented rotation procedure agreed with FIS. Transport is TLS over Code Connect. Because the payload carries full account numbers and FIS has not offered payload-level encryption, the UTEP covering account numbers over TLS only is completed and approved; if FIS confirms a payload-encryption option on Code Connect, the decision to adopt it is recorded and a follow-up story created.
-
-Acceptance criteria
-
-[ ] Client id and secret for sandbox and production are stored in the approved secrets store and read by the service at runtime [ ] Rotation procedure for the Code Connect secret is documented, including how often and who performs it [ ] TLS configuration and trusted certificate chain for Code Connect are documented and verified from the service runtime [ ] UTEP for account numbers over TLS only is submitted and approved under the hosting ASV [ ] FIS answer on payload-level encryption is recorded and the resulting decision noted on the Capability 2 page
-
-Story: Open the network path from the hosting ASV to FIS Code Connect Points: 5
-
-Description
-
-Make the OPF API reachable from where the Wire II service runs. Identify the Code Connect endpoints and IP ranges for sandbox and production, raise the security-group egress and firewall rules from the hosting ASV (PIE now, the Wire II ASV when ready), settle whether the traffic must be NAT'd and whether FIS needs Capital One ranges allow-listed on its side, and verify the path end to end from the service runtime rather than from a laptop. The temporary firewall rules are covered by a UTEP if they are not baselined.
-
-Acceptance criteria
-
-[ ] Code Connect endpoints and IP ranges for sandbox and production are confirmed with FIS [ ] Egress security-group and firewall rules are approved and applied for the hosting ASV [ ] NAT and FIS-side allow-list questions are answered and recorded [ ] Connectivity is verified from the service runtime in the non-production environment [ ] Temporary rules are either baselined or covered by an approved UTEP
-
-Story: Obtain production OPF API credentials and configure the connection per environment Points: 3
-
-Description
-
-Complete the FIS onboarding for production and wire the connection settings into each environment. This covers the production Code Connect client credentials and organisation identifier from FIS, the per-environment configuration of base URLs, token endpoints and header values, and a production connectivity check that proves authentication and routing without initiating a payment. A short runbook records how to verify, rotate and troubleshoot the connection.
-
-Acceptance criteria
-
-[ ] Production client credentials and organisation identifier are received from FIS and stored in the secrets store [ ] Base URL, token endpoint and header values are configured for each environment and selected by environment, not by code change [ ] Production authentication and routing are verified with a non-payment call agreed with FIS [ ] Runbook covers verification, credential rotation, and the first checks when the OPF API is unreachable [ ] FIS contacts and escalation path for connection issues are recorded
-
-Story: Build the shared OPF API client configuration for the Wire II service Points: 3
-
-Description
-
-Provide the Wire II service with one configured client for the OPF API so the connection established in this capability is used the same way everywhere: token acquisition with caching and refresh before expiry, the mandatory uuid and idempotency-key headers, connection and read timeouts suited to a synchronous call from Payment Exchange, and metrics and alerts for authentication failures, timeouts and 5xx responses. The client is generated from the registered FIS contract so the models stay in step with the specification.
-
-Acceptance criteria
-
-[ ] OAuth token is cached and refreshed before expiry; a failed refresh is retried and alerted [ ] uuid and idempotency-key headers are set on every call and traceable in logs without logging account data [ ] Connection and read timeouts are configurable per environment with agreed defaults [ ] Metrics and alerts exist for authentication failures, timeouts and 5xx responses [ ] Client models are generated from the registered FIS contract and rebuilt when the contract version changes
+Beyond these results, I demonstrated Continuous Improvement by adopting the BMAD and Pod Context Kit approach for our pod and shaping our context repository so the whole team works from one source of truth, Results Focused initiative by writing the Wire II epic and stories so the pod could start building without waiting, Communication by raising the vendor questions that would otherwise surface late, and Learning Agility by doing all of this while learning Capital One's platform, processes and ISO 20022 from a standing start.
