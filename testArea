@@ -1,5 +1,13 @@
-Teamwork:
-Blake owns the Capital One utility that takes our deconversion files and migrates the data into Fiserv, and he has worked with us as one team throughout the Bill Pay migration. He answers our open questions quickly, calls out any discrepancies his analysis finds so we can address them early, and never hesitates to raise a question or represent Capital One's view in a discussion. His time and effort on the Discover side of the migration are much appreciated, and it has been a pleasure working with and learning from him.
-
-Problem solving:
-Blake gets to the root of an issue rather than working around it. During the associate pilot he stepped in to debug the payment model versus payment instruction issue directly with the FIS partner and drove it to a resolution. In the mega dry run he identified and flagged the duplicate payees in the migration data, which gave our business partners what they needed to decide the right way to handle them before the customer waves. His analysis of every deconversion file consistently surfaces what is off before it becomes a problem for either side.
+#!/usr/bin/env bash
+# Prints N pairs of UUIDs for the FIS API headers.  Usage: ./uuids.sh 4   (default 1)
+n="${1:-1}"
+gen() {
+  if command -v uuidgen >/dev/null 2>&1; then uuidgen | tr 'A-Z' 'a-z'; return; fi
+  if [ -r /proc/sys/kernel/random/uuid ]; then cat /proc/sys/kernel/random/uuid; return; fi
+  # pure bash fallback: random hex with the version-4 and variant bits set
+  local h; h=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+  printf '%s-%s-4%s-%x%s-%s\n' "${h:0:8}" "${h:8:4}" "${h:13:3}" "$(( (0x${h:16:1} & 0x3) | 0x8 ))" "${h:17:3}" "${h:20:12}"
+}
+for ((i = 1; i <= n; i++)); do
+  printf '%-2s uuid: %s   idempotency-key: %s\n' "$i" "$(gen)" "$(gen)"
+done
