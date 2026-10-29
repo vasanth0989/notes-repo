@@ -1,13 +1,19 @@
-#!/usr/bin/env bash
-# Prints N pairs of UUIDs for the FIS API headers.  Usage: ./uuids.sh 4   (default 1)
-n="${1:-1}"
-gen() {
-  if command -v uuidgen >/dev/null 2>&1; then uuidgen | tr 'A-Z' 'a-z'; return; fi
-  if [ -r /proc/sys/kernel/random/uuid ]; then cat /proc/sys/kernel/random/uuid; return; fi
-  # pure bash fallback: random hex with the version-4 and variant bits set
-  local h; h=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
-  printf '%s-%s-4%s-%x%s-%s\n' "${h:0:8}" "${h:8:4}" "${h:13:3}" "$(( (0x${h:16:1} & 0x3) | 0x8 ))" "${h:17:3}" "${h:20:12}"
-}
-for ((i = 1; i <= n; i++)); do
-  printf '%-2s uuid: %s   idempotency-key: %s\n' "$i" "$(gen)" "$(gen)"
-done
+Story: Add field-level validation to the Bank Wire Rail II API contract Points: 3
+
+Description
+
+The Bank Wire Rail II API contract registered on Exchange describes the request body as the Payment Exchange payment object, but it carries no constraints on the individual elements. The existing Wire II API that receives a similar payment object validates it against a separate schema file after the request has been received, so the contract does not say what a valid request is and callers only find out at runtime. For Bank Wire Rail II the validation is declared inline in the OpenAPI specification: required elements, types and formats, lengths, patterns, enumerations and nullability for every element of the payment object, mapped from the rules the existing Wire II API applies today. The generated server models then enforce the rules at the API boundary, an invalid request is rejected with a 400 that names the failing elements before any conversion or call to OPF, and Payment Exchange has a contract it can build and test against.
+
+Acceptance criteria
+
+[ ] Field-level validation rules for every element of the payment object are listed and agreed with the tech lead [ ] Each rule is declared inline in the OpenAPI specification (required, type, format, length, pattern, enum, nullable), with no separate schema file [ ] Updated specification is published on Exchange with a version bump and shared with the Payment Exchange team [ ] Server models generated from the specification enforce the rules at the API boundary before conversion starts [ ] An invalid request returns 400 with the failing elements listed and nothing is persisted or sent to OPF [ ] Contract tests cover one valid request and a representative invalid request for each rule type
+
+Story: Stand up a WireMock stub of the FIS OPF API for development Points: 3
+
+Description
+
+In the development environment the Bank Wire Rail II service does not call FIS; only QA calls the FIS sandbox. Provide a WireMock stub of the OPF API built from the FIS OpenAPI contract so the service can be developed and tested end to end without FIS. The stub covers the OAuth token endpoint and the customer credit transfer initiation endpoint, and returns each response the service must handle: 202 accepted with the uuid echoed in the response header, 400 with the FIS validation error body, 401 for a missing or expired token, 422 for a reused idempotency key, 500 backend unreachable, and a delayed response to exercise the service timeout. The stub mappings are versioned with the service, run locally in a container and in the dev environment, and the service selects the stub or the real FIS endpoint by environment configuration only.
+
+Acceptance criteria
+
+[ ] WireMock stub for the token endpoint and the customer credit transfer initiation endpoint exists and matches the FIS contract paths, headers and response bodies [ ] Stubbed responses cover 202 with uuid echoed, 400 validation error, 401 invalid token, 422 duplicate idempotency key, 500 backend error and a delayed response [ ] Stub mappings and sample payloads are versioned in the repository and start with one command locally [ ] Stub is deployed and reachable in the dev environment [ ] Service points at the stub or the FIS sandbox by environment configuration, with no code change [ ] Service integration tests run against the stub and pass for every stubbed response
