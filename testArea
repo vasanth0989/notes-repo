@@ -1,1 +1,94 @@
-Hey Claude, what I want you to do is basically look into this reference repository. So this is a kind of a project, I think they have probably created it in DevNav Hub. So we also created an empty repository with the meaning using devna hub for our wire.ii api okay so that also contains a bogey file so i actually want to understand see i'm kind of i'm coming from EFS and then i'm new to this of yeah i'm new to this like come like the cough We are like what to say like yeah I'm new to this of environment and ecosystems obviously I'm okay with the respect to the java coding and things and stuff so with the DFS we have been working with the OCP and then other stuffs so meaning we have been using OCP and the Kubernetes that we do add our custom Jenkins pipeline called Trident and then pushing it to the OCP and creating Helm charts and stuff to push it but here in CoV I think for the Spring Boot API like the one which we have for WireAI they will be using AWS Fargate I think but I that's the thing I know like so but this is I wanted you to create one and so on. So, that's the first step. The second step is to create a document or a markdown file, completely explaining what the bogey file means, try to download the other skills that has to be required for you to explore more and then give me some more context. So, the markdown file you are going to prepare is going to explain what this bogey file, why we have to create repo from Devna hub and what is like, you also need to explain like what are the settings that has to be tweaked and how the onboarding happens, how the AWS account gets created, and how we will usually deploy, what is the Jenkins link and everything for in and out for someone who's starting fresh in the organization and he wants to deploy this app in the Spring Boot, like so meaning in the AWS environment. I have given you that reference project, right? So the reference project is the actual, the one which is in production. So it has all possible things. So you have to give me the complete, the key information in the mountain file. What is this bogey file and how this respect to the VPC, virtual private code, security group and all those things that has to be set up. and you also know that like basically with this, I'm again about like for the connecting to the, for connecting to FIS third-party API, is that right? I think there is some indirect things we have to onboard with the third-party API and that's when we are doing it. And what else is pending from our side, like meaning that has to be done, like I know, right, third-party onboarding, but why we do it what all things and the process that is involved and how we can actually have an egress rule or things that for us for our application to connect to the FIS API and how I think they're gonna have the client ID and the client secret and where we can keep the secret like in the current like meaning the reference project and stuff how we can store the secrets so in AWS and and how we can rotate the secret as well. And how to have this, I think we are gonna also have the DynamoDB for our application to write the current, meaning the request, as well as the status that is coming from the FIS. So that also has to be updated as part of the wire AI. How do we onboard the DynamoDB? And then like how actually it can be integrated into our AWS Fargate, I think. I want the explanation in and out. So you kind of prepare me that the markdown file that contains all this information. So anyone who is starting fresh and things, so they would be able to understand what is this is gonna do. And basically this is the context that you're gonna prepare or the markdown you're gonna prepare. Like it's gonna help me as act as a base to what are the user stories I would be required to create for my ADRs or PRD. Okay? So please go ahead, take your time, but I need the perfect document that you can ever witness. Thanks. I want to add one more thing as well. Like I think just checking into the reference repo, like what are the other types of things, meaning what are the test suits that they follow? like how many like do we need to write like Spring Boot Test, Integration Test, Acceptance Test, Cucumber yeah so the Cucumber one and then like so Cucumber like Acceptance Test using Cucumber's write the syntax, Zitkin's file and everything so I wanted to understand like so because any other development effort that is also has to be like added we also need to be encountered for that one is with respect to the API connection right and then we probably we have to go with the proxy layer from connecting from our fargate to the FIS so and the HTTP, TLS setup and stuff all these things that is required for the connection setup that is one and we want to know the in and out like how that is can be connected from the AWS Fargate API and then the another one is like that with respect to the development once we create our application like layer locally the Spring Boot app and things how this can be pushed to be there that bogey file to the AWS Fargate now we can connect to the like the DynamoDB and things and connecting to the FIOS API so all these things I have to understand as part of the mock run plan that you're going to prepare Thank you
+# Status comments for the PRD functional requirements (as of 30 October 2026)
+
+One comment per functional requirement. Each says what is blocked, what we are proceeding with, and what we are waiting on.
+
+---
+
+## PRD: Capability 2, OPF API Integration
+
+**FR-1, Establish OPF API connection**
+Blocked for a real end-to-end call: FIS confirmed on 29 October that the Code Connect sandbox has no OPF backend configured for Discover, and FIS will configure it only after the SOW is signed. What works today: the Code Connect application and subscription exist, OAuth 2.0 client-credentials tokens are issued and accepted, and requests reach the FIS gateway with the uuid, idempotency-key and organization-id headers. Proceeding with: the OPF API client built from the FIS contract, and a WireMock stub of the OPF API for development (story created). Waiting on FIS for the business application header identifiers, the organization id and the environment header values for Discover's instance.
+
+**FR-2, Idempotent submission handling**
+Not blocked for build. The client sends the idempotency-key equal to the UETR on every request, and retries reuse the same value. The 422 duplicate behaviour cannot be observed against FIS until the sandbox backend exists, so it is covered by the WireMock stub for now and verified against FIS later.
+
+**FR-3, Handle OPF API response codes**
+Proceeding with all branches against the WireMock stub: 400, 401/403, 422, 500/503, plus the responses actually observed from the gateway (500 "error connecting to the back end", 504 timeout, 400 business application header rejection). For the 202 branch: FIS confirmed there is no status API and no synchronous outcome beyond the 202; OPF's later outcomes exist only on its MQ status feed, which we are not consuming in Phase 1. The 202 is therefore treated as the final accepted outcome for this capability. FIS has promised sample requests and failure responses, which will replace the hand-built stubs.
+
+**FR-4, External API registration**
+Not blocked by FIS. The third-party registration of the FIS API on Exchange was submitted from the FIS OpenAPI contract, resubmitted on the new Exchange site after ISO asked for a fresh submission, and ISO's follow-up questions have been answered. Waiting on ISO cyber approval and the pre-production agreement. API Design and External Data Sharing reviews are in.
+
+**FR-5, Provision temporary OPF integration infrastructure**
+Proceeding. The Wire Rail II component was created through the DevNav Hub Fargate template on 30 October under the PIE business application, dev only, with an existing PIE security group. Outbound traffic to FIS leaves through the enterprise proxy; whether a firewall exception or UTEP is still needed on our side is being confirmed with the architects (the current understanding is that the partner gateway path needs no new firewall rules). The move to the Wire II ASV waits on build readiness, which is held up by a contact that cannot be edited on the form.
+
+**FR-6, Credential management**
+Sandbox credentials exist and are used today. Production credentials come from FIS only after the SOW. Wiring of the client secret into Secrets Manager and the service configuration is pending (placeholder in the pipeline file). TLS 1.2 is enforced. On the mutual-authentication question: FIS confirmed the API is protected by HTTPS and the OAuth 2.0 bearer token only, with no payload encryption and no mutual TLS offered, so this line can be closed as answered.
+
+**FR-7, Decommission readiness**
+Not blocked. The service and its registration will be tagged transitional as part of the build. The decommission checklist is deferred until the Phase 2 scope is defined.
+
+**FR-8, ASV naming decision**
+Decided for now: build under the PIE ASV, move to the Wire II ASV once build readiness is approved. Build readiness is blocked on a form contact that cannot be edited; being worked with the architects. Not blocking development.
+
+---
+
+## PRD: Capability 3, Submit Request to OPF API
+
+**Blocking question OQ-A (separate service or inside Wire Rail II)**
+Resolved by the team: one fully synchronous service, Wire Rail II, with no separate submit service and no SQS. The combined Capability 10 draft reflects this and is awaiting formal approval. Stage naming (OQ-D) is to be confirmed with the PayX integration team; the current design uses WIRECLEARING / WIRECLEARING.STOP with no intermediate stage.
+
+**FR-1, Submit to OPF API**
+Same state as Capability 2 FR-1: the call is built and exercised against the WireMock stub; a real submission is blocked until FIS configures the Discover backend after the SOW. The uuid and idempotency-key (= UETR) headers are implemented.
+
+**FR-2, Map OPF response to PayX outcome**
+Proceeding. The mapping table is implemented against the stubbed responses. Two things to confirm before this is final: the stage names (WIRECLEARING versus OPFCLEARING), and the exact FIS error bodies, which FIS has promised as samples. No pain.002 or MQ outcome is consumed in Phase 1, as FIS confirmed.
+
+**FR-3, Store OPF response against the transaction record**
+Proceeding in code; not blocked by FIS. The DynamoDB table itself is not provisioned yet (table, encryption key, IAM policy and VPC endpoint are new infrastructure work on our side).
+
+**FR-4, Return final status to PayX**
+Design settled: Wire Rail II is synchronous, so the final status is the HTTP response of the Wire Rail II call itself, returned to the new PayX integration service. There is no separate status call back to PayX. The Bank Wire Rail II API contract is registered on Exchange and needs an architecture review before cyber approval; it will be shared with the PayX integration team once onboarded to non-prod. Retries stay with PayX (Arbiter replay with the same UETR).
+
+---
+
+## PRD: Capability 10, Wire II (pain.001 Generation)
+
+**Blocking question OQ-D (submit directly or hand off via SQS)**
+Resolved by the team: Wire Rail II submits directly to the OPF API; no SQS, no separate Capability 3 service. The combined draft is awaiting formal approval.
+
+**FR-1, Extend the v9 converter to V11**
+In progress, not blocked. The mapping library repository exists and the payment-object-to-V11 conversion is being coded this sprint against the FIS specification's types (closed question OQ-A). One caveat from FIS: the formal data-mapping elaboration with their functional leads happens after the SOW, and our current mapping is the first pass they will compare against.
+
+**FR-2, Business Application Header mapping**
+Structure proceeding; values blocked. The header is built as mandatory, but the from/to identifiers for Discover's OPF instance are not yet provided by FIS and the sandbox currently rejects the header. The values are configuration, so the build continues with the FIS example values until FIS supplies ours.
+
+**FR-3, Serialization format change (XML to JSON)**
+Proceeding, not blocked. The JSON output is produced against the FIS OpenAPI contract.
+
+**FR-4, UETR population**
+Proceeding. The UETR arrives from PayX and is already used as the idempotency key, so populating it in the payload adds no new dependency. Whether OPF requires it in the message remains open with FIS; no impact on the build either way.
+
+**FR-5, Supplementary data envelope restructuring**
+Mapping proceeding from the FIS contract. What OPF expects inside the envelope is still unconfirmed with FIS; the promised sample requests and the post-SOW data-mapping session will settle it. Our build keeps the existing properties and adjusts once FIS confirms.
+
+**FR-6, Enumeration handling**
+Proceeding, not blocked. Runtime validation of the enumerated fields is part of the V11 build, and the same rules are being added inline to the Bank Wire Rail II API contract (validation story created).
+
+**FR-7, New optional field decisions**
+Proceeding, not blocked. The field-by-field decisions are recorded in the mapping analysis and reviewed with the tech lead.
+
+**FR-8, Preserve deliberate v9 workarounds**
+Proceeding, not blocked. Each of the three workarounds gets an explicit disposition during the V11 build.
+
+**FR-9, Durable transaction record**
+Proceeding in code; not blocked by FIS. The DynamoDB table provisioning (table, key, IAM, endpoint) is pending on our side.
+
+---
+
+## PRD: Integrate PayX with OPF (umbrella page)
+
+**Blocking question, merging Capability 3 into Capability 10**
+Resolved by the team as one synchronous service (Wire Rail II); the combined draft is awaiting formal approval, after which the Capability 3 PRD can be archived and these comments consolidated under Capability 10.
+
+**Program-level FIS dependency**
+As of 29 October: FIS will not configure the Discover backend or provide a sandbox before the SOW is signed. The SOW estimate is drafted as one project with the API first, then the Okta-to-Ping change, the FX and Compliance Link decommission, and networking. Until signature, all FIS-facing work proceeds against mocks and the FIS sample requests promised for this week.
