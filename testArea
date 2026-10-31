@@ -197,8 +197,8 @@ Acceptance criteria:
 
 Acceptance criteria (the story has none), add:
 
-- [ ] Transaction record keyed by UETR is written before the OPF call with the request payload, timestamps and status
-- [ ] Record is updated with OPF's response code and error body immediately after the call and before the response to PayX
+- [ ] First write: after conversion and before the OPF call, the transaction record keyed by UETR is written with the pain.001 JSON as sent, timestamps and status
+- [ ] Second write: immediately after the OPF call and before the response to PayX, the record is updated with OPF's response code, error body and final status
 - [ ] A retried call with the same UETR finds the existing record and does not create a duplicate
 - [ ] Lookup by UETR is supported for troubleshooting
 - [ ] Integration tests run against LocalStack; no account number is written to logs
