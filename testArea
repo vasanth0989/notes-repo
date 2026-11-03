@@ -1,8 +1,20 @@
+cat > git-stats.sh <<'EOF'
+#!/usr/bin/env bash
+if [ $# -ne 1 ]; then
+  echo "Usage: ./git-stats.sh <github-username>"
+  exit 1
+fi
+if [ -z "$GH_TOKEN" ]; then
+  echo "GH_TOKEN is not set"
+  exit 1
+fi
+
+ME=$1
 FROM=2026-01-01
 TO=2026-11-03
-ME=vsenth2
 ORG=bank-deposit-moneymvmt-org
-API=https://github.discoverfinancial.com/api/v3
+HOST=https://github.discoverfinancial.com
+API=$HOST/api/v3
 
 count() {
   n=$(curl -s -G -H "Authorization: Bearer $GH_TOKEN" --data-urlencode "q=$3" -d per_page=1 "$API/search/$2" | grep -m1 -o '"total_count": *[0-9]*' | grep -o '[0-9]*$')
@@ -10,6 +22,7 @@ count() {
   sleep 2
 }
 
+echo "Contributions for $ME in $ORG, $FROM to $TO"
 P="author:$ME org:$ORG"
 M="is:pr is:merged $P merged:$FROM..$TO"
 count "PRs created" issues "is:pr $P created:$FROM..$TO"
@@ -25,3 +38,10 @@ count "Theme: performance/reliability" issues "$M performance OR latency OR Gatl
 count "Issues created" issues "is:issue $P created:$FROM..$TO"
 count "Assigned issues closed" issues "is:issue is:closed assignee:$ME org:$ORG closed:$FROM..$TO"
 count "Commits authored" commits "$P author-date:$FROM..$TO"
+
+echo
+echo "Totals per repo:"
+curl -s -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" "$HOST/api/graphql" -d '{"query":"query { user(login: \"'"$ME"'\") { contributionsCollection(from: \"'"$FROM"'T00:00:00Z\", to: \"'"$TO"'T23:59:59Z\") { totalCommitContributions totalPullRequestContributions totalPullRequestReviewContributions totalIssueContributions restrictedContributionsCount pullRequestContributionsByRepository(maxRepositories: 100) { repository { nameWithOwner } contributions { totalCount } } pullRequestReviewContributionsByRepository(maxRepositories: 100) { repository { nameWithOwner } contributions { totalCount } } } } }"}'
+echo
+EOF
+chmod +x git-stats.sh
