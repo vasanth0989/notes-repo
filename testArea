@@ -1,1 +1,27 @@
-curl -s -H "Authorization: Bearer $GH_TOKEN" https://github.discoverfinancial.com/api/v3/user | grep '"login"'
+FROM=2026-01-01
+TO=2026-11-03
+ME=vsenth2
+ORG=bank-deposit-moneymvmt-org
+API=https://github.discoverfinancial.com/api/v3
+
+count() {
+  n=$(curl -s -G -H "Authorization: Bearer $GH_TOKEN" --data-urlencode "q=$3" -d per_page=1 "$API/search/$2" | grep -m1 -o '"total_count": *[0-9]*' | grep -o '[0-9]*$')
+  printf '%-34s %s\n' "$1" "${n:-FAILED}"
+  sleep 2
+}
+
+P="author:$ME org:$ORG"
+M="is:pr is:merged $P merged:$FROM..$TO"
+count "PRs created" issues "is:pr $P created:$FROM..$TO"
+count "PRs merged" issues "$M"
+count "PRs currently open" issues "is:pr is:open $P"
+count "Others' PRs reviewed" issues "is:pr reviewed-by:$ME -author:$ME org:$ORG created:$FROM..$TO"
+count "Others' PRs commented on" issues "is:pr commenter:$ME -author:$ME org:$ORG created:$FROM..$TO"
+count "All PRs involved in" issues "is:pr involves:$ME org:$ORG created:$FROM..$TO"
+count "Theme: bug fixes" issues "$M fix OR bug OR defect OR hotfix in:title"
+count "Theme: security/compliance" issues "$M security OR vulnerability OR CVE OR Mend OR \"Nexus IQ\" in:title"
+count "Theme: migrations/upgrades" issues "$M migration OR upgrade OR \"Spring Boot\" OR Jackson in:title"
+count "Theme: performance/reliability" issues "$M performance OR latency OR Gatling OR reliability in:title"
+count "Issues created" issues "is:issue $P created:$FROM..$TO"
+count "Assigned issues closed" issues "is:issue is:closed assignee:$ME org:$ORG closed:$FROM..$TO"
+count "Commits authored" commits "$P author-date:$FROM..$TO"
