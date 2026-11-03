@@ -1,14 +1,161 @@
-Status of the carried-forward items as of Monday 2026-11-02 standup:
-- YII security groups (Tejaswi/Cameron): resolved. Both repos are created in cof-primary (bank-wire-object-mapper library and bank-wire-rail-ii-api), tied to the PIE ASV for now; repo story demoed and moved to Done. Pipelines aborted until code is pushed.
-- ISO cyber-approval Q&A (Kaushik P): still open, Kaushik is still on the DevExchange approvals and setup.
-- Review of Vasanth's story closures (Kaushik): superseded. Vasanth cleaned the backlog on 10-31 (duplicates removed, Joe's suggested stories added, PRD comments posted on every FR); no review was raised at standup.
-- pain011 mapping: in progress. Vasanth continues the XML conversion and has also taken the JSON conversion, both targeted for sprint 26.4.3.
+# Cleanup of the epic "Pod 3: Foundational Environment Setup" (ENTPMTS-143221)
 
-Today's focus (2026-11-03):
-1. Review the PRDs before refinement today (Dylan's agenda is the PRD review); post any stories to review in the Slack channel.
-2. Continue the pain.001 XML conversion; document learnings as the code lands.
-3. Set up the development branch in the cof-primary repos and start moving the prototype code in via feature branches; PR titles must carry the Jira ID; close stories only after the PR merges.
-4. Add the confirmed ADRs to team-chesapeake-context (Kaushik's ask); Dylan pushes the PRDs when refined, hoped by Friday 11-06.
-5. Tejaswi: set the ASV field on the WireMock story (PIE), move it To Do > Ready > In Progress, start the stub from the FIS sample request; check both Jenkins pipelines.
-New norms: tick acceptance criteria as they are met while a story is In Progress; build with JDK 21, not 25.
-Follow-ups: VPN devices after yesterday's FIS networking call (Okta migration expected to be enterprise-led); finance reporting requirements from Dylan by 11-06; out of office 11-05/06 (McLean) for Vasanth and Tejaswi.
+Goal: the epic holds only the groundwork that the Capability 2 and Capability 10 stories build on (repositories, pipelines, dev environment and secrets, test data, the FIS paperwork, team conventions), with nothing that duplicates those two epics and nothing from the retired SQS design.
+
+## 1. Where the epic stands and what to tell Joe
+
+The epic has 15 tickets. Four are closed: the repository story and two ADR-update stories are Accepted, one ADR-update story is Canceled. The other 11 are in Backlog, unassigned and unpointed, created on 30 September from the epic's recommended-story list before the design was settled. Seven of them are duplicates of Capability 2 or Capability 10 stories, or describe the SQS layer that the synchronous design removed. Four stay and are rewritten; one story is added. After the cleanup the epic has 5 open stories, 19 points, finishing in sprint 26.4.5 (by 10 December), except the FIS paperwork story, which depends on the SOW.
+
+Paste-ready reply to Joe:
+
+> Foundational Environment Setup (ENTPMTS-143221) has 15 tickets: 4 closed (repositories created, ADR updates) and 11 still in backlog, unpointed, from the original list of 30 September. I have cleaned it up: 7 are closed as duplicates of Capability 2 and 10 stories or as obsolete (SQS scaffolding), 4 are rewritten for the current design (pipelines for both repos, dev environment and secrets, test data, FIS paperwork/SOW), and 1 is added (repo conventions, local setup and the team context repo). That leaves 5 open stories, 19 points, planned across sprints 26.4.3 to 26.4.5, so the epic completes by 10 December; the FIS paperwork story depends on the SOW signature.
+
+**Boundaries kept with the other two epics.** Capability 2 keeps the Exchange registration and approvals (144736, 145332), credentials and transport (145334), the network path (145335), the shared OPF client (145337), the sandbox first call (145333), production credentials (145336) and the ASV move. Capability 10 keeps the conversion, submission, persistence, WireMock, the prototype merge, DynamoDB provisioning, the QA environment, observability and the UAT end-to-end test. This epic keeps what every one of those needs first.
+
+**Sprint calendar.** 26.4.3: 29 Oct to 12 Nov (current). 26.4.4: 12 to 26 Nov. 26.4.5: 26 Nov to 10 Dec. 26.4.6: 10 to 24 Dec.
+
+## 2. Sprint plan for this epic
+
+| Sprint | Story | Points | Who |
+|---|---|---|---|
+| 26.4.3 (current) | NEW Repository conventions, local developer setup and the team context repo | 3 | Vasanth |
+| 26.4.4 | 143505 Pipelines for both repositories | 5 | Tejaswi |
+| 26.4.4 | 143504 Dev environment and secrets for Wire Rail II | 5 | Kaushik P |
+| 26.4.5 | 143506 Test data set for the Wire Rail II conversion and submission | 3 | Vasanth |
+| 26.4.4 to 26.4.5 | 143523 FIS SOW and paperwork for OPF API access | 3 | Kaushik R with Joe (tracking) |
+
+Fits the plan of 31 October: Tejaswi's 26.4.4 load becomes the prototype merge (5), DynamoDB (3) and 143505 (5); Kaushik P's becomes the shared client (3), contract validation (5) and 143504 (5); Vasanth's stays at the BAH (3), mapper wiring (3), the new conventions story (3) plus any carry-over of the XML-to-JSON story. 143505 and 143504 should finish before the prototype-merge story needs a green pipeline and a dev deployment, so start them first in 26.4.4.
+
+## 3. Stories to close
+
+Close each with the comment given, so the history explains the decision.
+
+- **143522 Register the OPF API (FIS UEAPI) as a consumed dependency in DevExchange.** Close as duplicate of 144736 (non-production registration, in progress) and 145332 (approvals) under Capability 2.
+- **143503 Get client ID for FIS.** Close as done: the Code Connect application, subscription and sandbox client credentials exist and tokens are issued (143492). Secure storage and team access are covered by 145334 under Capability 2 and by 143504 below.
+- **143499 Implement Wire II functionality.** Close as duplicate: this is the whole of the Capability 10 epic (mapper 144884, XML to JSON 143562, BAH 143564, submission 143577 and the rest).
+- **143500 OPF connection + SQS.** Close as won't do: the design is a synchronous call from the Wire Rail II service to the OPF API; there is no SQS layer. The connection is 145337 (shared OPF client) and 143577 (direct submission).
+- **143501 Provisioning for submit OPF.** Close as duplicate of 143504, which carries the same title; 143501's acceptance criteria were copied from the SQS story.
+- **143507 Stand up local/dev scaffolding for the SQS queue.** Close as won't do: no SQS in the design. Local development runs the service container against the WireMock stub (145516 and the prototype-merge story under Capability 10).
+- **143521 Confirm access to the existing v9 pain.001 converter codebase.** Close as done: the team has read access to the existing wire integration service and its V9 converter and reviewed it on 12 October; the decision of 5 October is that the V11 mapper is a new library, not an extension, so no further work remains here.
+
+Also tick the third acceptance criterion of 144880 (ADR reviewed by Kaushik) when the ADR approval lands, or leave the story as Accepted with the criterion open; either way no reopening.
+
+## 4. Stories to edit
+
+### Edit 143505, Set up CI/CD pipeline for Pod 3's repo
+
+Title, replace with: Set up the pipelines for the mapper library and the Bank Wire Rail II API repositories
+
+Points: 5. Sprint: 26.4.4. Assignee: Tejaswi.
+
+Description, replace with:
+Both repositories now exist in cof-primary: the mapper library (bank-wire-object-mapper) and the service (bank-wire-rail-ii-api), both registered under the PIE ASV for now. The service repository was generated by the DevNav Hub Fargate API template with a Bogiefile that drives the OnePipeline build, scan and deploy stages, but the wizard left the secrets, PagerDuty and Splunk entries empty, so the shift-left checks fail until they are filled. The library has no pipeline yet. This story makes both pipelines run green on a pull request: the library builds with JDK 21, runs its tests and publishes a versioned artifact to the artifact repository that the service can depend on; the service builds, passes the code-quality and security scans, builds its container image and deploys to the dev environment; and the deployment gates for each environment are configured. The pull-request check that requires the Jira ID in the title is confirmed on both repositories.
+
+Acceptance criteria, replace with:
+
+- [ ] Library pipeline builds with JDK 21, runs the unit tests and publishes a versioned artifact that the service resolves as a dependency
+- [ ] Service pipeline builds, scans and produces the container image on every pull request
+- [ ] Bogiefile entries left empty by the wizard are filled: secrets references, PagerDuty service, Splunk logging
+- [ ] Code-quality and security gates pass, with the coverage gate configured
+- [ ] Service deploys to the dev environment from the pipeline and the health check passes
+- [ ] Deployment gates and approvals are configured per environment and documented in the repository README
+- [ ] Pull-request check for the Jira ID in the title is confirmed on both repositories
+
+### Edit 143504, Provisioning for submit OPF
+
+Title, replace with: Provision the dev environment and secrets for the Bank Wire Rail II service
+
+Points: 5. Sprint: 26.4.4. Assignee: Kaushik P.
+
+Description, replace with:
+The service runs on Fargate in the entpay dev account under the PIE ASV. This story provisions what the service needs to run there, through the pipeline's infrastructure modules rather than by hand: the Fargate service and task definition, the task role with least-privilege policies, the security group and load balancer, the VPC endpoints for the AWS services it uses, and the outbound route through the enterprise proxy with no direct egress. It creates the secrets the service reads at startup in the enterprise secrets store: the Exchange client credentials for the OPF API sandbox, the encryption secret for the enterprise libraries and the Splunk token, with the secret identifier passed to the service as configuration and the task role allowed to read only those secrets. It records the resulting names, accounts and access steps in the repository runbook so the QA environment can be provisioned the same way later. DynamoDB is provisioned by its own story under Capability 10.
+
+Acceptance criteria, replace with:
+
+- [ ] Fargate service, task definition, task role, security group and load balancer provisioned in the dev account through the pipeline
+- [ ] VPC endpoints and the proxy route configured; outbound calls leave only through the enterprise proxy
+- [ ] Secrets created in the enterprise secrets store for the OPF API sandbox credentials, the encryption secret and the Splunk token
+- [ ] Service reads the secrets at startup through the secret identifier in its configuration; no plaintext credential in the repository or the Bogiefile
+- [ ] Task role can read only the service's own secrets
+- [ ] Deployed service answers its health check in dev
+- [ ] Runbook in the repository lists the resources, accounts, secret names and the steps to repeat for QA
+
+### Edit 143506, Confirm test data / UAT sandbox access for OPF API calls
+
+Title, replace with: Assemble the test data set for the Wire Rail II conversion and submission
+
+Points: 3. Sprint: 26.4.5. Assignee: Vasanth.
+
+Description, replace with:
+Sandbox access itself is done (the Code Connect application and credentials exist) and the first accepted call against the sandbox is tracked under Capability 2. What is missing is a shared, versioned test data set that the mapper tests, the WireMock stub, the QA tests and the UAT end-to-end test all use. This story collects representative PayX payment objects for the wire types in scope (customer credit transfer, financial institution transfer, drawdown), including tokenised fields as PayX delivers them, pairs each with the expected pain.001 output and the FIS sample request and responses, adds negative cases that exercise the known rejections, and stores the set in the repository with a short guide on how to use and extend it. No production data is used.
+
+Acceptance criteria, replace with:
+
+- [ ] Payment-object samples exist for each wire type in scope, with tokenised fields as PayX delivers them
+- [ ] Each sample has its expected pain.001 output and the matching FIS sample request and response
+- [ ] Negative samples cover the known rejection cases and the failure responses FIS provides
+- [ ] Test data set is versioned in the repository and used by the unit tests and the WireMock stub
+- [ ] Guide in the repository explains the cases and how to add one
+- [ ] No production data in the set
+
+### Edit 143523, Complete FIS contract/paperwork process required to establish OPF API access
+
+Title, replace with: Complete the FIS SOW and paperwork for OPF API access
+
+Points: 3. Sprint: 26.4.4 to 26.4.5. Assignee: Kaushik R, with Joe.
+
+Description, replace with:
+FIS exposes an OPF backend behind the Code Connect sandbox for Discover only after the statement of work is signed; nothing can be tested against the real API before that. FIS Professional Services has drafted a single estimate covering the API work first, then the sign-on change from Okta to Ping, the FX and Compliance Link decommissioning and the networking changes; whether networking gets a separate statement of work is undecided. This story tracks the paperwork to signature and to the date FIS commits for the sandbox backend, and confirms what the signed scope includes, so the sandbox, production-credential and UAT stories can be scheduled.
+
+Acceptance criteria, replace with:
+
+- [ ] Statement of work received from FIS, reviewed and its scope confirmed against the four work items
+- [ ] Decision recorded on whether networking is in the same statement of work or a separate one
+- [ ] Statement of work signed by Capital One and FIS
+- [ ] Date confirmed by FIS for the sandbox backend and shared with the team
+- [ ] Sandbox, production-credential and UAT stories updated with the confirmed dates
+
+## 5. New story
+
+**Story: Repository conventions, local developer setup and the team context repo**
+Points: 3
+Sprint: 26.4.3
+Assignee: Vasanth
+
+Description
+
+The two repositories exist but have no working conventions yet, and the team context repo that drives the morning plan and the story drafting lacks the design records. This story sets up both repositories the same way: a development branch that pull requests target, feature branches per story, branch protection with a required review and the Jira ID check on the pull-request title, a pull-request template, code owners, and a README that gets a new developer from a fresh laptop to a local run of the service container against the WireMock stub with JDK 21. It moves the prototype code into the service repository on its first feature branch so the merge story can start from there. It also adds the confirmed architecture decision records and, when published, the product requirement documents to the team context repo so stories can be drafted from them.
+
+Acceptance criteria
+
+- [ ] Development branch and branch protection with a required review are configured on both repositories
+- [ ] Pull-request template and code owners are in place; the Jira ID check on the pull-request title is confirmed
+- [ ] README takes a developer from a fresh laptop to a local run of the service against the WireMock stub with JDK 21
+- [ ] Prototype code is on a feature branch in the service repository with a pull request open against development
+- [ ] Confirmed architecture decision records are in the team context repo; product requirement documents are added when published
+
+## 6. Points after the cleanup
+
+| State | Stories | Points |
+|---|---|---|
+| Done (Accepted or Canceled) | 144880, 144882, 143497, 144881 | 9 done, 3 canceled |
+| Closed by this cleanup | 143522, 143503, 143499, 143500, 143501, 143507, 143521 | none |
+| Open after cleanup | 143505 (5), 143504 (5), 143506 (3), 143523 (3), new conventions story (3) | 19 |
+
+Of the 19 points, 16 are Pod 3 work finishing in 26.4.5; the 3 for the FIS paperwork depend on FIS.
+
+## 7. Epic text to update
+
+Acceptance criteria of the epic, replace with:
+
+- [ ] Pipelines of the mapper library and the Bank Wire Rail II API run green on pull requests and the service deploys to dev
+- [ ] Dev environment and secrets for the service are provisioned through the pipeline and documented
+- [ ] Shared test data set exists and is used by the unit tests and the WireMock stub
+- [ ] FIS statement of work is signed and the sandbox backend date is known
+- [ ] Repository conventions and the local developer setup are documented and in use
+
+Definition of done, replace with:
+
+- [ ] Pipelines, dev environment, secrets, test data and conventions are in place, giving Pod 3 a working base to build Capability 2 and Capability 10 against
+
+In the description, replace the recommended-story list with the five stories above and remove the lines about the SQS queue and the v9 converter scaffolding; keep the resources links.
