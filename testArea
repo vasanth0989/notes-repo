@@ -1,1 +1,9 @@
-api "com.capitalone.commercial:payx-payload:${payxPayloadVersion}"
+com.capitalone.commercial.payx.sdp.payload.model.SDPPayload
+com.capitalone.commercial.payx.sdp.payload.model.Account
+com.capitalone.commercial.payx.sdp.payload.model.Bank
+com.capitalone.commercial.payx.sdp.payload.model.Address
+com.capitalone.commercial.payx.sdp.payload.model.ExchangeRate
+com.capitalone.commercial.payx.sdp.payload.model.RemitterInfo
+com.capitalone.commercial.payx.sdp.payload.model.CustomerPersonalInfo
+com.capitalone.commercial.payx.sdp.payload.model.OptionalHeaderInfo
+com.capitalone.commercial.payx.sdp.payload.model.PaymentType
