@@ -1,9 +1,26 @@
-com.capitalone.commercial.payx.sdp.payload.model.SDPPayload
-com.capitalone.commercial.payx.sdp.payload.model.Account
-com.capitalone.commercial.payx.sdp.payload.model.Bank
-com.capitalone.commercial.payx.sdp.payload.model.Address
-com.capitalone.commercial.payx.sdp.payload.model.ExchangeRate
-com.capitalone.commercial.payx.sdp.payload.model.RemitterInfo
-com.capitalone.commercial.payx.sdp.payload.model.CustomerPersonalInfo
-com.capitalone.commercial.payx.sdp.payload.model.OptionalHeaderInfo
-com.capitalone.commercial.payx.sdp.payload.model.PaymentType
+Standup 2026-11-03 updates
+
+Carried items
+- pain.001 mapping: group header mapped and validating against the XSD; continuing with the remaining elements against the payment object (Vasanth). Both the XML and the JSON conversion stay with Vasanth this sprint.
+- ISO cyber approval Q&A: internal API cyber approval is ready; the API design team asked for changes, added on the Payx-Wire-Payment-Processor API attributes story, review pending (Kaushik P).
+- External API (DevExchange): still waiting on the API design approval; the design team said they would look at it today (Kaushik P).
+- Foundational Environment Setup epic cleanup: half done, will be posted in chat for Joe and Dylan (Vasanth).
+
+Decisions
+- DynamoDB: provisioning comes first. "Provision the DynamoDB table and access for Wire Rail II" moved into the current sprint at 3 points with Kaushik P (table, encryption defaults, task role policies, table name and configuration per environment, table design). "DynamoDB transaction record persistence" moved to the backlog until the service and the JSON exist; the "access verified from the running service" criterion moved there with it. Both moves commented in Jira. Sirisha (Pod 1) has provisioned DynamoDB already; a DevExchange template exists.
+
+FIS
+- Networking follow-up of 2026-11-02: nothing new. FIS needs a call with Capital One's networking team, scheduled Thursday 2026-11-05; FIS expects its side to be networking and firewall rules only. VPN devices still to follow up.
+- SSO and Okta: tracked under a separate FIS SOW that FIS says it has shared; Kaushik R to open a separate chat; no decision before Thursday.
+
+Product
+- Dylan updated the PRDs this morning; refinement today on the high-level PRDs and the in-flight capabilities; link to follow.
+- Joe asked which Capability 2 and 10 stories can proceed without the sandbox; Vasanth shared the list in chat.
+- Dylan will pull Vasanth's per-PRD comments on what is blocked and not blocked into one synthesised document.
+
+Today
+- Vasanth: continue the mapping; finish and post the epic cleanup; update the morning plan.
+- Kaushik P: DynamoDB provisioning; chase both approvals.
+- Tejaswi: continue the WireMock stub analysis.
+
+No blockers reported.
