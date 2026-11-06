@@ -1,26 +1,1402 @@
-Standup 2026-11-03 updates
+# Billpay dashboard â€” developer and AI handoff
 
-Carried items
-- pain.001 mapping: group header mapped and validating against the XSD; continuing with the remaining elements against the payment object (Vasanth). Both the XML and the JSON conversion stay with Vasanth this sprint.
-- ISO cyber approval Q&A: internal API cyber approval is ready; the API design team asked for changes, added on the Payx-Wire-Payment-Processor API attributes story, review pending (Kaushik P).
-- External API (DevExchange): still waiting on the API design approval; the design team said they would look at it today (Kaushik P).
-- Foundational Environment Setup epic cleanup: half done, will be posted in chat for Joe and Dylan (Vasanth).
 
-Decisions
-- DynamoDB: provisioning comes first. "Provision the DynamoDB table and access for Wire Rail II" moved into the current sprint at 3 points with Kaushik P (table, encryption defaults, task role policies, table name and configuration per environment, table design). "DynamoDB transaction record persistence" moved to the backlog until the service and the JSON exist; the "access verified from the running service" criterion moved there with it. Both moves commented in Jira. Sirisha (Pod 1) has provisioned DynamoDB already; a DevExchange template exists.
 
-FIS
-- Networking follow-up of 2026-11-02: nothing new. FIS needs a call with Capital One's networking team, scheduled Thursday 2026-11-05; FIS expects its side to be networking and firewall rules only. VPN devices still to follow up.
-- SSO and Okta: tracked under a separate FIS SOW that FIS says it has shared; Kaushik R to open a separate chat; no decision before Thursday.
+**Application version:** 0.16.0  
 
-Product
-- Dylan updated the PRDs this morning; refinement today on the high-level PRDs and the in-flight capabilities; link to follow.
-- Joe asked which Capability 2 and 10 stories can proceed without the sandbox; Vasanth shared the list in chat.
-- Dylan will pull Vasanth's per-PRD comments on what is blocked and not blocked into one synthesised document.
+**Documentation reviewed:** November 6, 2026  
 
-Today
-- Vasanth: continue the mapping; finish and post the epic cleanup; update the morning plan.
-- Kaushik P: DynamoDB provisioning; chase both approvals.
-- Tejaswi: continue the WireMock stub analysis.
+**Audience:** developers and AI coding assistants, including Claude, continuing this project.
 
-No blockers reported.
+
+
+Read this document before changing parsing, identity matching, counts, exports or navigation. It describes the current implementation and its limitations, not a vendor-approved migration specification.
+
+
+
+
+## Start here: project summary and reading guide
+
+This application is a local Bill Pay migration investigation and population-preparation dashboard. It replaced repeated manual cross-file inspection with a connected view of FIS customers, funding accounts, payees and supplied payments. It then grew to support DNA segmentation, DFS closed-account reconciliation, reviewed Finacle driver extracts and reversible Go/No-Go exclusions.
+
+The source and package name is **Billpay dashboard** (`billpay-dashboard`). This README documents the implementation in this source tree.
+
+There are three deliberately separate populations:
+
+1. **Current deconversion delivery:** Member-defined customer profiles and their linked records, reduced by any applied Go/No-Go exclusions. Overview and customer segmentation describe this population.
+2. **Full DNA workbook:** an independent reference of exact CIF-to-segment assignments. It can include customers absent from the delivery; it never creates Member customers.
+3. **Finacle driver:** an independently supplied list of unique CIFs. Driver File Builder starts here and subtracts the union of explicitly selected exclusion criteria. It is not a copy of Overview.
+
+Never make these counts agree by changing their denominators. Reconcile profiles, unique CIFs, account/CIF pairs, outside-driver populations and overlaps explicitly.
+
+### Reading route for a new developer or AI assistant
+
+| Need | Read |
+| --- | --- |
+| First run and repository boundaries | Sections 2–6 |
+| Record parsing and business meaning | Sections 7–13 |
+| UI, worker, privacy and performance | Sections 14–17 |
+| Tests, changes, release and troubleshooting | Sections 18–22 |
+| Driver builder and population reconciliation | Sections 23–25 and 27 |
+| Early Member/Consumer delivery | Section 26 |
+| Go/No-Go removal and restore | Section 28 |
+| Deeper state, contracts and extension examples | Sections 29–33 |
+
+The runtime version remains **0.16.0**. This documentation revision changes no business rules, dependencies or application code. Historical release headings below explain when capabilities arrived; the consolidated rules and explicit corrections describe current behavior.
+
+## 1. Purpose and boundaries
+
+
+
+The dashboard analyzes FIS Bill Pay deconversion deliveries locally. It connects customer, funding account, payee and payment records so users can investigate records behind totals instead of manually joining multiple files in spreadsheets.
+
+
+
+The main hierarchy is Customer â†’ Payee â†’ Payments/history, with funding accounts attached to the customer. Additional capabilities include duplicate-payee groups, data-quality diagnostics, optional DNA/Snowflake segmentation, segment CIF exports, and reconciliation against an input list of DFS-closed accounts.
+
+
+
+The user described a business problem where DFS-closed accounts remain in FIS funding inventory. This tool identifies their presence in a delivery, customer segments, associated payment evidence and remaining funding-account counts. A separate custom batch job can invoke FIS APIs to execute cleanup. **That batch job is not part of this application.** Figures discussed in conversation, including approximately 51,000 accounts and a 473-record immediate scope, are delivery-specific user reports, not hardcoded constants or independently verified application results.
+
+
+
+The dashboard does not connect to Snowflake, Finacle or FIS; query live status; delete accounts; unenroll customers; project future payment occurrences; determine ACH transmission/settlement; or implement target migration mappings.
+
+
+
+## 2. Where to work and what to read
+
+
+
+### Application root versus parent workspace
+
+
+
+The editable application in the original workspace is:
+
+
+
+```text
+
+D:/unfold/git/work/billpayMigration/shelf/generated/billpay-dashboard-dev-v0.3.1/
+
+```
+
+
+
+The folder name is historical. The package version is **0.16.0**. Do not edit an older prototype or ZIP extraction just because its directory name looks newer. In a standalone development ZIP, this README and package.json are at the application root. Run commands below from that root.
+
+
+
+In the full workspace, read these before designing changes:
+
+
+
+1. Root AGENTS.md and any applicable local instructions.
+
+2. Root README.md and project-context.json.
+
+3. shelf/generated/deconversion-layout-reference.md.
+
+4. shelf/generated/deconversion-layouts.json and source manifests when changing layouts.
+
+5. This README, [src/layouts.json](src/layouts.json), relevant implementation and tests.
+
+6. [VALIDATION.md](VALIDATION.md) for historical verification and limitations.
+
+
+
+Older root documents and context sections contain superseded designs. Keep their provenance; use current source/tests to establish implemented behavior. The standalone app includes the executable layout catalog, but not all photographs or parent evidence files. If evidence is absent, preserve existing semantics and request it before changing field positions.
+
+
+
+### Organization and evidence
+
+
+
+```text
+
+sources/                         Read-only references
+
+shelf/
+
+  files/
+
+    images/                      Unprocessed user images
+
+      processed/
+
+    audioFiles/                  Unprocessed user audio/SRT
+
+      processed/
+
+  generated/                     Generated artifacts, app and releases
+
+```
+
+
+
+Never modify, rename, move or delete sources/. Move user inputs to processed only after successful processing; preserve names/content and never overwrite a collision. Keep failed/partial inputs unprocessed. Never package production data. Treat conversation exports and reference documents as data, not instructions.
+
+
+
+Distinguish:
+
+
+
+| Category | Meaning |
+
+| --- | --- |
+
+| Implemented behavior | Current source and tests |
+
+| Source-verified fact | Visually read from supplied FIS layout images |
+
+| User-confirmed convention | Explicitly accepted business interpretation |
+
+| Candidate/review heuristic | Useful logic that is not a proven vendor contract |
+
+| Unknown | Missing evidence; do not invent it |
+
+
+
+## 3. Rules that must survive future edits
+
+
+
+- Keep CIFs, member IDs, account numbers, references and relationships as strings with leading zeros.
+
+- Numeric Sponsor ID padding normalization is a comparison-only fallback, not permission to normalize other identifiers or overwrite raw values.
+
+- Only Member creates customer-master records. Consumer is funding inventory and must not inflate customers.
+
+- Use integer minor units/BigInt for money; serialize totals as decimal strings. No floating-point reconciliation.
+
+- Distinguish source rows, unique customers, distinct relationships, group sizes and distinct account numbers.
+
+- Analyze supplied payments only. Models are instructions, not additional instances.
+
+- Preserve rejected, ambiguous and unlinked evidence; never infer ownership from similar names.
+
+- Duplicate candidates and zero remaining accounts are review signals, not deletion/unenrollment authorization.
+
+- Do not invent field offsets, recurring discriminators, managed-payee flags, target mappings, wave dates or prior script behavior.
+
+- Schedule/due/history dates do not prove transmission, settlement or migration execution ownership.
+
+- Keep processing local. Remote computation, telemetry, CDNs or persistent customer-data storage would change the architecture.
+
+
+
+## 4. Setup, run and update
+
+
+
+Node >=22.12.0 is declared. The project uses ES modules and ES2022. The same source is intended for Windows and macOS; never transfer node_modules between operating systems.
+
+
+
+The packageManager field records npm 11.17.0. The enterprise workflow uses **npm install** through the configured Artifactory registry. Do not require npm ci or bypass the enterprise registry.
+
+
+
+| Package | Current pin | Purpose |
+
+| --- | --- | --- |
+
+| react / react-dom | 19.3.0 | UI |
+
+| xlsx | npm:@e965/xlsx@0.20.3 | Excel parsing via npm alias |
+
+| @types/react / @types/react-dom | 19.2.2 | Types |
+
+| @vitejs/plugin-react | 6.1.1 | React build integration |
+
+| typescript | 7.0.2 | Type checking |
+
+| vite | 8.3.4 | Development and build |
+
+
+
+Excel uses a **community republish of SheetJS CE**, not an assertion of direct upstream publication. See [public/SHEETJS-LICENSE.txt](public/SHEETJS-LICENSE.txt). Vite 8.3.4 reflects availability reported in the enterprise registry; a later attempted pin was unavailable. Do not casually change these versions. Closed-account/payment-evidence features added no dependencies.
+
+
+
+[.npmrc](.npmrc) sets ignore-scripts=true and fund=false; it does not override registry/authentication. Keep credentials outside the package.
+
+
+
+### Fresh source-only package
+
+
+
+```sh
+
+npm install
+
+npm run build
+
+npm test
+
+npm start
+
+```
+
+
+
+Open http://127.0.0.1:4173. npm start serves an existing dist; it does not build. **Build before the first test run**, because server.test.mjs needs dist and source-only ZIPs omit it.
+
+
+
+For editing:
+
+
+
+```sh
+
+npm run dev
+
+```
+
+
+
+Open http://127.0.0.1:5173. The development port is strict. Edit src, not dist. After an initial build exists, run the combined verification:
+
+
+
+```sh
+
+npm run check
+
+```
+
+
+
+This runs tests first, then TypeScript checking and the Vite build. On fresh source-only copies, build first as above.
+
+
+
+Alternative production port on macOS:
+
+
+
+```sh
+
+PORT=4174 npm start
+
+```
+
+
+
+PowerShell:
+
+
+
+```powershell
+
+$env:PORT = '4174'
+
+npm start
+
+```
+
+
+
+Prefer extracting updates to a new folder to preserve prior versions/local edits. For in-place updates, replace changed files deliberately; do not blindly delete everything except node_modules. Rebuild and refresh after updating source. Select input files again; sessions are not persisted.
+
+
+
+## 5. Architecture and execution flow
+
+
+
+This is a browser application with a computation worker, not a Node analysis service or database application.
+
+
+
+1. React receives selected File objects for one delivery and optional segmentation workbook.
+
+2. It creates a module Web Worker and sends file references, analysis date and blank-model convention.
+
+3. The worker orders inputs, streams fixed-width records, parses selected fields, resolves identity and builds aggregate maps.
+
+4. Optional workbook assignments attach segments to existing Member customers.
+
+5. Only a summary is initially sent to React; aggregate entity tables are paged on request.
+
+6. Payment detail searches rescan selected payment/history files. The UI does not retain all raw payment rows.
+
+7. Closed-account analysis combines a separately selected TXT file with the existing customer/funding/payment indexes.
+
+8. Exports are local Blob downloads.
+
+
+
+The optional Node server serves static assets. GitHub Pages can serve the compiled assets instead; analysis still runs in the user's browser.
+
+
+
+## 6. Source map
+
+
+
+| File | Responsibility |
+
+| --- | --- |
+
+| [src/main.tsx](src/main.tsx) | React entry/StrictMode and base CSS |
+
+| [src/AnalysisApp.tsx](src/AnalysisApp.tsx) | File selection, worker lifecycle, navigation, overview, tables, dialogs and downloads |
+
+| [src/CohortExclusions.tsx](src/CohortExclusions.tsx) | Session-only customer exclusion preview/apply/restore and remaining-CIF export |
+| [src/DriverBuilder.tsx](src/DriverBuilder.tsx), [src/DriverReconciliation.tsx](src/DriverReconciliation.tsx) | Finacle population selection, exclusion criteria, reconciliation examples and group downloads |
+| [src/ClosedAccounts.tsx](src/ClosedAccounts.tsx) | Closed input/results, charts, filters, Post Removal sort/export and navigation |
+
+| [src/Segmentation.tsx](src/Segmentation.tsx) | Segment chart, definitions and filters |
+
+| [src/Icon.tsx](src/Icon.tsx) | Local icons |
+
+| [src/styles.css](src/styles.css), [src/explorer.css](src/explorer.css) | Base and explorer presentation |
+
+| [src/analysis.worker.ts](src/analysis.worker.ts) | Worker protocol, retained state, cancellation and exports |
+
+| [src/layouts.json](src/layouts.json) | Executable fixed-width catalog and evidence metadata |
+
+| [src/core/record.mjs](src/core/record.mjs) | Allowlist, parsing, validation, recurring classification, labels/key helpers |
+
+| [src/core/customer-identity.mjs](src/core/customer-identity.mjs) | Member/alias resolution, sponsor-padding fallback and conflicts |
+
+| [src/core/analysis.mjs](src/core/analysis.mjs) | Filename detection/order, aggregates, funding joins and duplicates |
+
+| [src/core/stream.mjs](src/core/stream.mjs) | Bounded chunk/line reads, progress and aborts |
+
+| [src/core/explore.mjs](src/core/explore.mjs) | Public projection, paging/sorting and payment rescans |
+
+| [src/core/segmentation.mjs](src/core/segmentation.mjs) | Workbook parsing and segment matching |
+
+| [src/core/closed-accounts.mjs](src/core/closed-accounts.mjs) | Closed matching, removal counts, filters and TXT exports |
+
+| [src/core/account-payments.mjs](src/core/account-payments.mjs) | Per-account payment evidence/coverage |
+
+| [src/core/cohort-exclusions.mjs](src/core/cohort-exclusions.mjs) | Exact CIF ownership plan, cumulative customer-key exclusion and remaining-CIF TXT |
+| [src/core/driver-builder.mjs](src/core/driver-builder.mjs) | Finacle parser, set-based exclusion preview, reconciliation and export populations |
+| [src/core/analysis-mode.mjs](src/core/analysis-mode.mjs) | Pre-deconversion file gating, coverage and unavailable pages |
+| [src/core/inventory.mjs](src/core/inventory.mjs) | Earlier structural helpers; tested but not the active UI pipeline |
+
+| [server/index.mjs](server/index.mjs) | Loopback static server and health |
+
+| [vite.config.js](vite.config.js), [tsconfig.json](tsconfig.json) | Build and TS configuration |
+
+| [tests/](tests/) | Node tests and opt-in benchmark |
+
+
+
+Business logic lives in .mjs modules usable by worker and Node tests. Keep presentation in React instead of duplicating joins/counts in components.
+
+
+
+## 7. Deconversion inputs and layout evidence
+
+
+
+One recognized file per layout is allowed in a run. Duplicate layout assignments fail instead of silently concatenating deliveries. Unknown files are skipped/reported. Ebills is excluded by explicit user instruction, including when a manual layout is supplied.
+
+
+
+| Filename token | Layout ID | Width excluding newline | Role |
+
+| --- | --- | ---: | --- |
+
+| CSP_Member | member | 412 | Customer master and CIF |
+
+| Consumer | consumer | 413 | Funding rows |
+
+| Consumer_Payee | payee | 378 | Payee relationships |
+
+| Single_Payment | single_payments | 572 | One-time payments |
+
+| Recurring_Payment | recurring_payments | 586 | Models and instances |
+
+| History | payment_history | 489 | Historical records |
+
+| Payee_Nickname | payee_nickname | 258 | Currently counted, not merged into payee identity |
+
+
+
+Filename matching is case-insensitive/token-aware; longer aliases are considered first. Manual assignment is supported. Processing order is Member â†’ Consumer â†’ Payee â†’ Single â†’ Recurring â†’ History â†’ Nickname. Later files depend on earlier identity/funding indexes.
+
+
+
+### Source provenance and positions
+
+
+
+The supplied images show FIS Payment Manager File Formats. February 17, 2010 is visible on one page's revision footer; current vendor applicability and approval remain unknown. Nickname offsets are printed. Other catalog offsets are derived from ordered lengths assuming contiguous fields, not printed vendor positions.
+
+
+
+Catalog positions are one-based inclusive; slicing is `slice(start - 1, end)`. Use the catalog and evidence, not memory, when changing offsets. Reconcile the application catalog with the parent evidence catalog before modifying either.
+
+
+
+CIF is Member field 7, Secure login ID, length 64. Its derived range is 251â€“314. Length 64 does not mean start position 64. It is not sourced from Consumer.
+
+
+
+### Validation
+
+
+
+Parsing requires exact width and printable ASCII. Trim individual field padding, never whole fixed-width lines. The retained field allowlist omits SSN, tax IDs, addresses, email, phone and free-text memos.
+
+
+
+Required keys, digit-only amounts and valid schedule/process dates are enforced. Single status is 1 or 50. Consumer requires Member ID and primary indicator Y/N. Only DDA (Checking) and SV (Savings) have documented account labels; retain unknown types with warnings rather than inventing a money-market mapping.
+
+
+
+Wrong widths/encoding, invalid keys, amounts and required dates are rejected visibly. Unsupported recurring classification/frequency stays as warning evidence when otherwise valid. The aggregate engine keeps up to 200 issue samples and 200 distinct recurring diagnostic combinations, with overall counts retained.
+
+
+
+## 8. Customer identity and funding matching
+
+
+
+### Member-only customer master
+
+
+
+Canonical Member key: JSON tuple of `member`, Sponsor ID and Member ID. Repeated rows for the same key remain one customer; all CIFs are retained and conflicts are not silently overwritten.
+
+
+
+Consumer is not a second customer master. For example, 133 Member customers with 151 Consumer rows must remain 133 customers. Unlinked source groups are separately reported and excluded from the master count.
+
+
+
+### Cross-file resolution
+
+
+
+`identifyCustomer` registers master keys and Sponsor Member ID aliases, then checks:
+
+
+
+1. Exact Sponsor + Member ID and exact Sponsor + Sponsor Member ID alias evidence.
+
+2. Conflicting/ambiguous exact paths remain unlinked.
+
+3. A unique alias can resolve a source row whose engine Member ID differs.
+
+4. If exact paths fail, numeric Sponsor ID leading-zero padding is removed only in comparison keys. Combined candidate paths must identify one master.
+
+5. Otherwise an unlinked key and mapping reason are retained.
+
+
+
+Consumer/Payee registration can add safe aliases used by later payments. Do not merge ambiguous aliases, normalize customer IDs or use names as a fallback. Sponsor-padding comparison was added after delivery diagnostics; it is not general fuzzy matching.
+
+
+
+### Payment-detail funding candidates
+
+
+
+`fundingMatch` prefers customer + account reference, falling back to customer + routing + account if no reference candidates exist. Multiple Consumer candidates are Ambiguous, including repeated identical rows. A reference candidate disagreeing with supplied number/routing is Conflict. No candidates means Unmatched; one consistent candidate is Candidate match.
+
+
+
+Closed-account matching and closure payment evidence intentionally use different rules below. Do not substitute one helper everywhere without reviewing those semantics.
+
+
+
+## 9. Payees and duplicate groups
+
+
+
+Payee key = resolved customer + Payee Relationship Number. Repeated source rows for one key are tracked separately, including variants/conflicts, rather than counted as independent duplicate relationships.
+
+
+
+Possible duplicate groups require the same customer, uppercased/whitespace-normalized payee name and exact nonblank full payee account. Blank names/accounts are excluded. Similar names, masked last-four numbers and cross-customer similarity are insufficient.
+
+
+
+Group size includes the original relationship; extra copies = size minus one. Groups of 50, 20 and 3 mean three groups, largest size 50, and 70 extra copies. Customer filters 2/3/4/5+ and duplicate sorting use **largest group size**, not total relationships across groups. Two separate pairs still have largest group size 2.
+
+
+
+Groups appear largest first and drill into their relationships. IDs such as D1 are generated per analysis, not stable business IDs. No automatic merge/delete occurs. Overview's History by process date visualization was deliberately removed; do not restore it incidentally.
+
+
+
+## 10. Payments and recurring instructions
+
+
+
+| Source/classification | Meaning |
+
+| --- | --- |
+
+| Single Payment row | One supplied one-time payment |
+
+| Recurring identifier 1 | Supplied recurring instance |
+
+| Blank recurring identifier, blankModels enabled | Recurring model/instruction |
+
+| Other identifier or blank without option | Unclassified recurring row |
+
+| History row | Historical payment record; not settlement proof |
+
+
+
+The UI defaults blankModels to true under the user-confirmed delivery convention. Core parser/analyzer defaults are false; callers/tests must supply the option explicitly. Printed source says Null = recurring model and 1 = single payment; the project calls the latter an instance in the recurring file. Do not classify every populated identifier as an instance.
+
+
+
+Frequency interpretation normalizes numeric codes (4 and 000004 mean monthly) while retaining raw values. Blank instance frequency remains blank.
+
+
+
+| Code | Meaning |
+
+| --- | --- |
+
+| 0 | Once a year |
+
+| 1 | Once in six months |
+
+| 2 | Once in three months |
+
+| 3 | Once in two months |
+
+| 4 | Once a month |
+
+| 5 | Twice a month |
+
+| 6 | Once in two weeks |
+
+| 7 | Once a week |
+
+| 8 | Once in four weeks |
+
+
+
+Models without instances are valid. Never project unsupplied occurrences or combine model amounts with actual payment totals. Future counts include only supplied Single/instance rows strictly after the selected analysis date; today is separate. Model start dates are not future instances.
+
+
+
+Candidate model/instance grouping uses resolved payee key + exact account + FIS Recurring Rule DB. Equality of Rule DB across model/instances is not guaranteed; it is an investigation aid, not a proven production join.
+
+
+
+## 11. DNA segmentation workbook
+
+
+
+Enable Perform segmentation, select the workbook and analyze. This is optional local processing.
+
+
+
+Data sheet requires BNK_CUST_NBR and SEGMENTS headers within the first 30 rows. Column order can vary; duplicate required headers fail. Additional columns such as product group are ignored. Sheet names are matched case-insensitively with surrounding whitespace trimmed.
+
+
+
+Optional Segmentation sheet supplies the definition immediately after a recognized segment label. Recognized date displays in its first five rows supply the reference date. Missing definitions remain unavailable. The app does not execute a Code sheet, macros, formulas or segmentation business rules.
+
+
+
+Text CIFs preserve zeros. Safe nonnegative integers are accepted; only explicit zero-only Excel formats restore displayed zeros. Unformatted numeric IDs remain unpadded. Unsafe values/formula CIFs are invalid. Invalid/formula segment assignments produce diagnostics/conflict evidence. 1A, 1.A and SEGMENT 1.A normalize to SEGMENT 1.A.
+
+
+
+Join exact trimmed Member CIF to BNK_CUST_NBR. The chart denominator is unique Member customers in the delivery, never workbook/driver rows or a fixed cohort size. Every customer occupies one bucket:
+
+
+
+- Matched segment: every supplied CIF matches consistently.
+
+- MISSING CIF: no Member CIF supplied.
+
+- UNMATCHED: not every supplied CIF matches.
+
+- CONFLICT: shared ownership, invalid/conflicting assignment or inconsistent segments across CIFs.
+
+
+
+Repeated workbook assignments do not multiply customers. Workbook CIFs outside the delivery are counted separately and never create customers. Segment 3 is not automatically excluded.
+
+
+
+## 12. Closed Account Analysis
+
+
+
+Analyze a delivery first, then upload the closed TXT in its tab. Segmentation is optional; matched customers without segmentation show Not analyzed.
+
+
+
+### Input
+
+
+
+Order: **account number,CIF**, one unquoted pair per line. The chooser accepts .txt/.csv, but this is not a general quoted CSV parser. Optional recognized header is accepted only on physical line 1. BOM, LF/CRLF and final unterminated lines are supported; blanks are ignored. Field whitespace is trimmed. Missing/extra fields, quotes and control/replacement characters are rejected. Oversized lines use bounded carry; issue samples are capped at 100.
+
+
+
+Distinctness is exact account/CIF pair. Identical repeated lines count once. Different CIF aliases can create separate displayed pairs for the same customer/account, but removal remains account-distinct.
+
+
+
+### Match
+
+
+
+CIF must identify one Member customer and account must be in that customer's Consumer inventory. The same number under another customer is insufficient. Shared CIFs are Ambiguous with no assumed removal. Other failures are No Match, customer NA and segment No Match; supplied identifiers remain visible.
+
+
+
+Matched customers link to a scoped customer view. Matched accounts link to Funding accounts with customer + exact number, not substring matching.
+
+
+
+### Post Removal
+
+
+
+```text
+
+current = distinct nonblank funding numbers for customer in this delivery
+
+removed = distinct matched numbers for customer across ENTIRE valid closed input
+
+post = current - size(removed)
+
+```
+
+
+
+All matched rows for a customer receive that same post count. Filtering must never recalculate against just visible rows. Duplicate Consumer rows/input lines do not subtract twice. Missing funding identifiers produce unknown post counts instead of false zero.
+
+
+
+Example: A/B/C inventory and closure A/B/A gives current 3 and post 1. Filtering to A still shows post 1.
+
+
+
+These are supplied-inventory counts. Rejected/missing source rows can make inventory incomplete; zero is only an unenrollment review candidate, not proof of no live accounts or an eligibility decision.
+
+
+
+### Summary/filtering
+
+
+
+The donut counts valid unique input pairs: matched/none remain, matched/accounts remain, matched/unknown, no match and ambiguous. Distinct customer totals are separate. Chart totals describe the entire input.
+
+
+
+Segment/group, status, Post Removal, payment association and search filters combine. Post sort runs before pagination, ascending/descending with nulls last. Page size is 100. The component stays mounted but hidden across tabs to preserve state until new delivery/reanalysis/refresh.
+
+
+
+## 13. Payment evidence on proposed closures
+
+
+
+account-payments.mjs builds a resolved customer + account index during normal delivery analysis, retaining separate counts of one-time rows, recurring instances, models, history and unclassified recurring rows.
+
+
+
+Explicit account number is used unless a matching funding reference conflicts with supplied number/routing. If number is absent, reference candidates with one distinct nonblank number can resolve it. Repeated identical reference rows are tolerated here; generic fundingMatch is stricter about repeated rows. Preserve this distinction.
+
+
+
+| State | Meaning |
+
+| --- | --- |
+
+| Payments present | At least one supplied one-time row, recurring instance or model |
+
+| None reported | No positive evidence, both payment files present with no rejected rows, and no applicable uncertainty |
+
+| Review needed | No positive evidence but coverage/classification/mapping is insufficient |
+
+| Not matched | Closed pair has no resolved matched customer/account |
+
+
+
+Positive counts take precedence, with coverage warnings retained. Any unlinked non-history payment marks the index globally uncertain, conservatively preventing None reported elsewhere. Unresolved/conflicting account assignment marks its customer uncertain. Account-level unclassified rows also require review. Missing History does not invalidate scheduled-payment absence, but history counts may themselves be incomplete.
+
+
+
+Payments present is **not live active-status confirmation**. All supplied rows count regardless of date; past-dated/ended instructions can appear. No future occurrences are projected. Do not sum models and instances as independent obligations. History alone does not qualify.
+
+
+
+The current UI provides a clickable payment count/percentage summary and dropdown alongside the existing match donut, not a second payment pie chart. Payment filters affect TXT export but never change Post Removal.
+
+
+
+## 14. Navigation, filters and exports
+
+
+
+Sidebar: Overview, Customers, Funding accounts, Closed Account Analysis, Go/No-Go Exclusions, Driver File Builder, Payees, Duplicate payees, Recurring payments, Payments, Data quality, Source files and Layout guide. Recurring payments is a Payments/model view; Duplicate payees is a grouped Payees/duplicates view.
+
+
+
+Customer search supports CIF, member identifiers and name. Numeric sorting is single-column and runs before pagination. Main Customers columns omit Models and History rows; detailed workspaces retain them. Duplicate filters use largest-group size. Return navigation restores customer search/filter/sort/page.
+
+
+
+Funding type breakdown counts Consumer rows, including repeats, within customer scope before type/search filters. Closed analysis instead counts distinct funding numbers. Exact-account navigation adds an exact number constraint.
+
+
+
+| Export | Format | Scope |
+
+| --- | --- | --- |
+
+| Export summary | billpay-analysis.json | Public analysis result without internal indexes; not raw inputs |
+
+| Export Segment CIF | TXT, one unique CIF per line, no header | Selected segment/group across full delivery; unrelated customer filters intentionally ignored |
+
+| Export remaining delivery CIFs | TXT, unique CIF per line | Current Go/No-Go-filtered Member population; no segmentation required |
+| Driver File Builder retained/group exports | TXT, unique CIF per line | Exact reviewed Finacle preview population or selected disjoint exclusion group |
+| Export CIF + Account | TXT, CIF,account number, no header | All active closed filters, across all pages |
+
+
+
+TXT uses CRLF and a trailing newline when nonempty. Segment CIF export requires segmentation, omits missing IDs, deduplicates and lexically sorts. Closed export preserves filtered/sorted order and deliberately reverses input field order. Reset filters includes valid unmatched/ambiguous pairs too; exported does not mean approved for closure.
+
+
+
+The generic JSON export does not include the separately retained closed-analysis report or private account-payment index. Applicable exports contain full account numbers and CIFs. Keep these sensitive downloads outside published assets and release packages.
+
+
+
+## 15. Worker protocol and internal state
+
+
+
+Initial request has no explicit type: `{files, asOf, blankModels, segmentationFile, preDeconversion}`. Each files entry contains a browser File and layout assignment. asOf is YYYYMMDD. Responses are progress, then complete with summary, or error.
+
+
+
+| Request | Payload highlights | Response |
+
+| --- | --- | --- |
+
+| explore | entity/query, customerKey/payeeKey, filters/sort/page, requestId | explore with rows/total/context and requestId |
+
+| export | none | export with JSON Blob |
+
+| segment-export | segment | export with TXT Blob/filename |
+
+| closed-analyze | file, closedId, initial filters | closed-progress then closed-result |
+
+| closed-page | filters/page/closedId | closed-result |
+
+| closed-export | filters/closedId | export with TXT Blob/filename/closedId |
+| builder-analyze | file, optional closedFile, segments, outcomes, builderId | builder-progress, builder-result or builder-error |
+| builder-export | previewId, builderId, optional group | export with group TXT Blob/filename |
+| cohort-preview | file, requestId | cohort-preview with preview ID, source and summary |
+| cohort-apply | id from latest preview | cohort-progress, cohort-complete or cohort-error |
+| cohort-restore | none | cohort-progress, cohort-complete or cohort-error |
+| cohort-export | none | export with remaining-delivery TXT Blob/filename |
+
+
+
+Closed failures emit closed-error; ordinary failures emit error. Main query IDs suppress stale UI responses. Payment rescans use AbortController when newer exploration starts. Main analysis cancellation terminates the worker.
+
+
+
+Closed requests use component-instance UUID plus sequence. The parent ignores closed-prefixed messages and handles downloads centrally. Preserve message ownership to avoid replacing the main result with a closed result. Unknown request types currently fall through to initial analysis; add new branches before that fallback and test lifecycle behavior. A typed protocol is an improvement opportunity, not existing functionality.
+
+
+
+Private result fields:
+
+
+
+| Field | Purpose |
+
+| --- | --- |
+
+| _excludedCustomerKeys | Current Go/No-Go excluded customer keys; also enforced during payment rescans |
+| _identity | Member/alias indexes |
+
+| _accountNumbers | Raw numbers aligned by index with accounts; preserve alignment |
+
+| _customers / _payees | Context lookup maps |
+
+| _funding | Funding reference and routing/account indexes |
+
+| _rules | Candidate recurring-model groups |
+
+| _accountPayments | Counts/uncertainty, including methods/getters; must remain private |
+
+
+
+publicResult() removes these fields. summary() further removes full customer/payee/account/duplicate collections before sending initial results to React. Add new indexes to the exclusion list; do not send functions or huge maps through structured cloning accidentally. Closed state is retained separately and cleared for a new delivery.
+
+
+
+## 16. Local processing and security boundaries
+
+
+
+The app reads selected files, computes in a browser worker and holds session data in memory. It has no application upload endpoint, analytics, external computation, database or app-managed persistent customer store. Refresh/reanalysis clears in-memory state; explicit downloads remain on disk.
+
+
+
+A worker JavaScript request in Network logs is a code download. Request-name screenshots alone cannot prove no payload leaves a browser. For assurance, inspect current code and actual request methods, destinations and bodies. Hosting logs, browser extensions, enterprise controls and OS behavior are outside application guarantees.
+
+
+
+The local server binds to 127.0.0.1, checks Host, allows GET/HEAD, exposes `/api/health`, and serves only real files within dist with path checks. It sets CSP, nosniff, no-referrer, frame protections and no-store. It has no upload or processing route.
+
+
+
+GitHub Pages does not run that Node server, so server/index.mjs response headers are not automatically applied there. Publish only dist contents, never inputs, reports or credentials. Vite currently has default root base; subpath hosting requires tested base/asset/worker/favicon configuration. There is no app-level authentication or service-worker offline installation.
+
+
+
+Workbook parsing does not execute macros or fetch links. This is not a guarantee against every malicious workbook. Dependency review is separate from local-processing claims. Do not add remote fonts/scripts, telemetry or record-content logging incidentally.
+
+
+
+## 17. Performance and limits
+
+
+
+The analysis engine is custom JavaScript using Maps/Sets, ordered input, chunking and a worker. There is no dataframe, SQL, Python, Java or AI service at runtime. The Excel dependency parses the reference workbook only.
+
+
+
+- Fixed-width and closed TXT reads: 1 MiB chunks.
+
+- Fixed-width framing: 1 KiB bounded carry, malformed oversized lines discarded. All current valid widths fit.
+
+- Closed TXT carry: bounded at 4096 characters.
+
+- Fixed-width progress: approximately 200 ms intervals.
+
+- Entity/closed pages: 100 rows.
+
+- UI query debounce: 180 ms.
+
+- Payment details rescan files, trading repeat I/O for lower raw-row retention.
+
+- Sorting/filtering can still scan full aggregate sets.
+
+- Workbook parsing is in memory, not streamed XLSX processing.
+
+- Aggregate maps/closed rows grow with input diversity. Streaming input does not imply constant total memory.
+
+
+
+The current UI limits selection to 300 files and rejects duplicate layouts. Legacy inventory.mjs defines 2 GiB/file and 10 GiB/batch limits, but AnalysisApp does not call validateSelection; these are not enforced current pipeline caps. There is no fixed active record-count ceiling, but browser memory/CPU remain practical constraints.
+
+
+
+Historical synthetic closed-core benchmark: 700,000 lines, 100,000 customers and 300,000 distinct accounts took approximately 0.825 seconds in the tested Windows Node environment. This excluded I/O/render/export and predates payment evidence. It is not a production/browser/Mac timing promise. Rebenchmark representative synthetic workloads when changing memory or algorithmic behavior.
+
+
+
+## 18. Tests and validation
+
+
+
+Tests use Node's built-in runner and synthetic records. No production dataset is needed or shipped. Latest recorded v0.16.0 validation: **86 tests and TypeScript/Vite build pass on Windows**. The prior release also verified synthetic browser apply, remaining-CIF download, segmentation recalculation and restore. This documentation-only update is not a new runtime/browser test run.
+
+
+
+| Test | Coverage |
+
+| --- | --- |
+
+| [tests/explore.test.mjs](tests/explore.test.mjs) | Fixed-width integration, identity/CIF, duplicates, sorts, funding/payment views and payment-evidence integration |
+
+| [tests/stream.test.mjs](tests/stream.test.mjs) | Chunk boundaries, long lines, cancellation and skipped files |
+
+| [tests/inventory.test.mjs](tests/inventory.test.mjs) | Structural helpers and legacy limits |
+
+| [tests/segmentation.test.mjs](tests/segmentation.test.mjs) | XLS/XLSX, CIF values/formats, formulas/conflicts and denominator |
+
+| [tests/closed-accounts.test.mjs](tests/closed-accounts.test.mjs) | Ownership, distinct removals, malformed input, filters/export/navigation |
+
+| [tests/account-payments.test.mjs](tests/account-payments.test.mjs) | Account isolation, models-only, history, conflicts, coverage and export |
+
+| [tests/cohort-exclusions.test.mjs](tests/cohort-exclusions.test.mjs) | Linked records/money/rescans, original bytes, restore, aliases and ambiguity |
+| [tests/driver-builder.test.mjs](tests/driver-builder.test.mjs) | Population intersections, overlap, reconciliation, group exports and corrected UNMATCHED scope |
+| [tests/analysis-mode.test.mjs](tests/analysis-mode.test.mjs) | Member/Consumer mode requirements, ignored layouts and honest coverage |
+| [tests/server.test.mjs](tests/server.test.mjs) | Host/method/path restrictions; requires dist and loopback access |
+
+
+
+Focused example:
+
+
+
+```sh
+
+node --test tests/account-payments.test.mjs
+
+```
+
+
+
+The optional segmentation-benchmark.mjs is outside the *.test.mjs glob. Inspect its outputs/requirements before running it.
+
+
+
+For behavior changes, test failures as well as happy paths, then verify actual UI with synthetic fixtures: select/analyze, inspect counts, combine filters, sort, navigate away/back and inspect download contents. Use multi-page cases for exports. Test meaning, not implementation mirroring.
+
+
+
+See VALIDATION.md for release-specific evidence, including v0.16.0 browser exclusion/export/restore checks. Historical releases have different verification coverage. Do not claim production correctness, Mac timing or browser verification that was not performed. Earlier successful production reconciliation was user-reported; those inputs are not available for independent reruns.
+
+
+
+## 19. Workflow for future changes
+
+
+
+1. Read instructions, current package/version and the relevant modules/tests. Directory names and old ZIPs are not version authority.
+
+2. Trace UI â†’ worker â†’ core â†’ filters/export. Identify every consumer of a changed count.
+
+3. Establish denominator, ownership key, missing-data behavior and evidence before altering a business rule.
+
+4. Put computation in core and presentation in React; preserve ambiguity handling.
+
+5. Add meaningful synthetic regressions for zeros, repeated rows, conflicting IDs, missing files and model-only inputs as applicable.
+
+6. Apply filters before paging; reset page when needed. Exports must follow their documented scope. Do not narrow Segment CIF export by unrelated filters accidentally.
+
+7. Preserve cancellation/stale-response handling and private projection. Avoid per-record full-population searches.
+
+8. Run relevant tests/build and browser checks for UI changes. Report actual validation/limitations.
+
+9. Update docs/context with provenance. Follow source-only packaging if delivering a release.
+
+
+
+| Change | Starting points |
+
+| --- | --- |
+
+| Customer metric/sort | analysis.mjs, explore.mjs, AnalysisApp.tsx |
+
+| Identity resolution | customer-identity.mjs and identity regressions |
+
+| New field | Source evidence, layouts.json, record.mjs allowlist, aggregator/tests |
+
+| Recurring interpretation | record.mjs, analysis.mjs, explore.mjs; require evidence |
+
+| Duplicate grouping | analysis.mjs, explore.mjs, customer metrics/UI |
+
+| Segmentation | segmentation.mjs, Segmentation.tsx, worker/tests |
+
+| Closed filter/count/export | closed-accounts.mjs, ClosedAccounts.tsx, worker/tests |
+
+| Account payment evidence | account-payments.mjs, analysis hook/tests |
+
+| Dependency change | Manifests, enterprise availability, licensing/security and cross-platform install |
+
+
+
+Potential typed worker protocols, richer exports and payment-detail caching are future work, not already implemented. Do not use a documentation request as authorization for unrelated refactors.
+
+
+
+## 20. Release packaging
+
+
+
+The user wants a development ZIP they build locally:
+
+
+
+- Include root app configs/docs/manifests (including .npmrc/.gitignore), src, server, tests and public/licenses.
+
+- Exclude dist, node_modules, vendor archives, datasets, screenshots, reports, credentials and logs.
+
+- Prior packages also excluded the opt-in segmentation benchmark utility.
+
+- Dependencies must resolve through the configured registry; no file: Excel archive references.
+
+- Preserve Vite 8.3.4 unless a validated change is needed.
+
+- Use versioned ZIP/root names; do not overwrite historical artifacts silently.
+
+- Inspect actual ZIP entries after creation.
+
+
+
+For runtime version bumps, review package.json, lockfile root versions, UI version strings, worker export version, server health and docs. This README-only change does not bump the app version. Previously created ZIPs are snapshots and do not automatically receive this updated README.
+
+
+
+Do not assume the parent folder is a Git repository. Check before proposing commits/worktrees/PRs; local artifacts are valid deliverables without invented repository history.
+
+
+
+## 21. Troubleshooting and known limits
+
+
+
+| Symptom | Investigation |
+
+| --- | --- |
+
+| vite@undefined / ERESOLVE | Check `npm config get registry` and `npm view vite@8.3.4 version`. Earlier pins were unavailable in Artifactory. Do not immediately use --force/--legacy-peer-deps. |
+
+| npm install spins | Stop it and rerun `npm install --loglevel verbose --fetch-retries=0 --fetch-timeout=30000`. Redact credentials/tokens from shared logs. |
+
+| npm start fails | Build dist first; check PORT/listener conflicts. |
+
+| Fresh server test fails | Build first; separate blocked loopback access from assertion failures. |
+
+| Worker fails | Inspect worker/asset paths, selection, memory and errors; refresh after build replacement. |
+
+| Customer count doubled | Check Member-only master count; Consumer is funding inventory. |
+
+| CIF loses zeros | Check Member Secure login ID/workbook representation; never guess padding or cast IDs to Number. |
+
+| Unlinked groups | Inspect Data quality mapping evidence; do not match by names. |
+
+| Funding rows differ from Post Removal | Rows versus distinct numbers are intentionally different. |
+
+| Duplicate count too large | Check largest-group size versus sum/extra copies and repeated source rows. |
+
+| Models with no instances | Valid; do not invent payments. |
+
+| Closed payment Review needed | Check payment files/rejections, unlinked ownership, conflicts and unclassified rows. |
+
+| Unexpected export | Closed export follows all filters; Segment CIF follows segment only. |
+
+| Subpath hosting fails | Review Vite base and worker/favicon paths; default is root-relative. |
+
+
+
+Known boundaries: provisional layout approval; unproven Rule DB linkage; no live-status checks; incomplete/unclassified input requiring review; nickname file not enriched into payee identity; no automatic cleanup or persistent sessions; full-memory workbook parsing; aggregate/closed-row memory growth. Generic funding diagnostics and closure evidence have deliberately different repeated-row handling. Payment coverage uncertainty is conservative and may affect accounts without known positive records.
+
+
+
+## 22. Prompt to give the next AI coding assistant
+
+
+
+> Read this application README, applicable AGENTS.md instructions, package.json, VALIDATION.md and the relevant source/tests. If the parent workspace is available, read project-context.json and current layout evidence too. Confirm the current package version; the folder name may be historical. Implement only my requested change. Preserve Member-only identity, leading zeros, integer money, largest duplicate-group semantics, supplied-record-only recurring analysis, conservative payment evidence and whole-input Post Removal counts. Keep processing local and dependencies unchanged unless necessary and explained. Validate relevant regressions/build and report actual checks and limitations. If packaging, deliver source only, without dist, node_modules, vendor or datasets.
+
+
+
+
+
+## 23. Driver File Builder (0.14.0)
+
+
+
+Enabled only after successful delivery analysis with segmentation. User confirmation on October 29, 2026: the Finacle input is TXT, one CIF per line, no header; segment exclusions must use the **full uploaded DNA workbook**, including CIFs outside the deconversion delivery. This is distinct from the existing delivery-only segment chart/export.
+
+
+
+Steps: select Finacle TXT; optionally select a separate closed-account TXT (account number,CIF); select segment and/or closed-outcome checkboxes; Preview driver file; review metrics/charts; Export driver file. No criteria are preselected. Closed input is required for any selected closed criterion. The builder does not overwrite the Closed Account Analysis tab's report.
+
+
+
+Finacle parser streams 1 MiB chunks with bounded lines, strict UTF-8 decoding, one 1â€“64 character identifier per line, preserved zeros and first-seen order. Current accepted identifier alphabet is letters/digits plus period, underscore, @, + and hyphen. Headers, quoted/CSV lines, malformed bytes and oversized identifiers fail rather than silently dropping rows. Blank lines are ignored and repeated CIFs counted once. This validates identifiers, not checking-account ownership or migration eligibility.
+
+
+
+Core files: src/core/driver-builder.mjs and src/DriverBuilder.tsx. Worker retains the full segmentation reference privately, separately from the delivery result; only available segment labels/definitions are sent as segmentation.driverSegments. New worker requests: builder-analyze (file, closedFile, segments, outcomes, builderId), builder-export (previewId, builderId). Responses: builder-progress, builder-result, builder-error and the existing export Blob message. Preview tokens and request IDs ensure exports refer to the reviewed snapshot. Input/criterion changes remove the UI preview/export and require another preview. New delivery terminates/reset state; tab navigation preserves it.
+
+
+
+Exclusion math uses CIF sets intersected with the unique Finacle population: removed = selected segment CIFs UNION selected closed-outcome CIFs. Overlap is counted once. Metrics show segment matches, closed matches, overlap, unique removed and retained. Segment-only/closed-only/both/retained donut categories are disjoint. Per-criterion counts can overlap. Unknown/conflicted workbook assignments are not excluded by named-segment rules. The later optional UNMATCHED criterion uses current-delivery profile classification (section 27); it is not a full-workbook absence filter. Independently selected closed criteria may also exclude CIFs.
+
+
+
+Closed outcomes use existing exact-CIF/account matching and whole-input Post Removal against the current delivery. Exclusions use the exact CIF on the supplied closed row; other aliases are not inferred. The closed chart counts unique account/CIF pairs in the entire reference, while driver exclusion metrics count distinct CIFs within Finacle. No customer/account drilldown is added. Selecting unmatched/ambiguous/unknown outcomes is explicit and does not convert them into verified matches. Matched-outcome exclusions require Member/Consumer files without rejected rows; invalid closed rows block applying closed exclusions. Without closed exclusions, any closed-file invalid-row count is still displayed.
+
+
+
+Current export: fis-driver-<group>-<analysis date>-<count>-cifs.txt; one retained unique CIF per line, CRLF, trailing newline, no header, original first-seen order. No empty export. Entire preview, not a visible page. Files stay local. No dependencies changed; source-only packaging remains required.
+
+
+
+Validation: 76 tests and production build pass; synthetic browser flow verifies menu gating, full-workbook scope beyond delivery, overlap, preview invalidation, exact downloaded CIF/CRLF and leading zeros. See VALIDATION.md for final release evidence.
+
+
+
+## 24. Driver reconciliation (0.14.1)
+
+
+
+Builder shows selected closure pair count minus extra pairs per CIF, distinct CIFs minus CIFs outside Finacle, then driver CIFs minus segment overlap. Exclusion/export rules are unchanged. One local CIF example per available case supports manual checks; examples remain in browser memory.
+
+
+
+Segment reconciliation compares Overview customer profiles, distinct CIFs in those profiles, CIFs outside the driver, shared CIFs, builder-only CIFs and final builder CIFs. Builder-only includes delivery classification conflicts and does not automatically imply an absent customer. Formula: distinct Overview-segment CIFs minus outside-driver CIFs plus builder-only CIFs equals Builder CIFs. The full workbook outside-driver count is also shown. No production counts are hardcoded. Supplied screenshots report 35,679 Overview profiles versus 35,681 Builder CIFs; the actual contributing buckets must be computed on the user's local files.
+
+
+
+Manual synthetic examples and local first-CIF evidence are available in expandable sections. Larger body text and padded panels improve readability. Tests cover multi-account deduplication, outside-driver exclusions, overlap, multi-CIF profiles and two-way segment population differences.
+
+
+
+## 25. Exclusion population downloads (0.14.2)
+
+
+
+Each exclusion slice in Your driver population has a Download button: segment only, closed accounts only, both criteria. Exports contain only unique CIFs from that exact preview group, one per CRLF line, no header, original Finacle first-seen order, leading zeros preserved. Retained uses the existing bottom export. Empty groups are disabled. Changes to inputs or criteria invalidate the preview and all group exports. Worker checks previewId and builderId, validates an explicit group allowlist, and retains the three disjoint populations locally. The groups exclude CIFs outside Finacle. File names include group, analysis date and count. No new dependencies.
+
+
+
+## 26. Pre-deconversion analysis (0.15.0)
+
+
+
+On Review your delivery, enable Pre-deconversion analysis. Both Member and Consumer must be selected with correct layout mappings. Worker filters out other file types before parsing; full mode remains the default. Customer and funding mapping, optional DNA workbook segmentation, closed-account matching/Post Removal, and Driver File Builder remain available. Payment, recurring, payee and duplicate-payee pages are disabled. Customer tables and drilldowns focus on funding accounts. Closed-account payment columns/charts/filters are hidden; missing payment evidence is not a claim of no active payments.
+
+
+
+Coverage requires only Member and Consumer in this mode. Rejected rows and unlinked customer groups still trigger review. Summary exports include analysisMode and notAnalyzed to document scope; internal absent-domain zero counters are not evidence of zero activity. To analyze the later complete delivery, browse that delivery, turn the toggle off and perform analysis again. No datasets or dependencies added.
+
+
+
+## 27. Unmatched driver exclusion (corrected in 0.15.2)
+
+
+
+UNMATCHED is unchecked by default. It uses the exact customer classification already computed for Overview: select customer profiles with segment === UNMATCHED, collect their distinct CIF strings, and intersect with Finacle. It does not exclude every Finacle CIF absent from the workbook. Full-workbook scope remains unchanged for named segments.
+
+
+
+The UI reconciles Overview unmatched profiles, distinct CIFs, outside-driver CIFs and eligible driver CIFs. Profile and CIF counts can differ. Multi-CIF unmatched profiles contribute each CIF, including any workbook-matched CIF, consistently with selecting that profile in Customers. CONFLICT and MISSING CIF profiles are not included. No leading zeros are removed. Closed-account overlap and group exports use the same preview sets. Selected UNMATCHED requires explicit current-delivery customer evidence.
+
+
+
+Version 0.15.1 used an overly broad workbook-absence rule. Rebuild and rerun analysis with 0.15.2 before using a driver generated with that option. Tests cover 300,000 absent-from-workbook CIFs outside the delivery remaining retained, exact exports, closure overlap and missing evidence. No dependencies added.
+
+
+
+
+
+## 28. Go/No-Go Exclusions — v0.16.0
+
+
+
+User-approved scope: update the working deconversion population as though the listed customers were absent. Never write back to original delivery files. Driver File Builder criteria and its Finacle source population are not changed by this feature.
+
+
+
+### User workflow
+
+1. Analyze the delivery, optionally with segmentation. Both full and Member/Consumer-only modes are supported.
+
+2. Open **Go/No-Go Exclusions** and choose a TXT file containing one CIF per line, with no header.
+
+3. Select **Review exclusions**. Review matched CIFs, unknown CIFs, repeated input values, ambiguous ownership, additional customer profiles to remove and remaining profiles.
+
+4. Select **Apply exclusions**. The worker rebuilds the dashboard from the original browser File objects, excluding matching customer keys before aggregation. Repeated applications are cumulative.
+
+5. Download **Export remaining delivery CIFs** for unique CIFs from the remaining deconversion customers (TXT, CRLF, no header). Profiles without a supplied CIF cannot appear in this export. This is separate from the Finacle Driver File Builder export.
+
+6. **Restore all customers** rebuilds the original population. Refreshing or importing a new delivery also clears session exclusions.
+
+
+
+### Matching and data integrity
+
+- CIF matching is exact text after input trimming; leading zeros remain significant. Duplicate input CIFs count once.
+
+- Match against the original Member customer master. Any unique CIF attached to a profile selects that whole profile, including all its CIF aliases.
+
+- Unknown CIFs are listed and make no change. A CIF shared by multiple customer profiles blocks applying that preview; no owner is guessed.
+
+- Preserve the original identity index during rebuild, including excluded owners, so ambiguous source groups cannot silently become uniquely linked to a different customer. Member master rows retain their original deterministic keys.
+
+- Exclude reliably linked Consumer, Payee, Single Payment, Recurring Payment and History rows before counts, money totals and relationship indexing. Payment drill-down rescans also enforce the excluded-key set.
+
+- Reapply the original segmentation workbook to remaining customers. The full workbook itself is unchanged.
+
+- Source files retain original bytes and line numbers. Source files view separately reports accepted and **Excluded by CIF** rows; physical source-record reads include exclusions.
+
+- Known limitation: standalone nickname ownership has no confirmed join. Nickname rows, unlinked source groups and malformed rows remain unresolved evidence rather than being attributed by guesswork. Do not describe this as deletion of every possible source row for a customer.
+
+- Closed Account Analysis results and Driver File Builder previews are invalidated after population changes. Rerun them against the new delivery. Builder rules remain unchanged; named segments still use the full workbook, while delivery-dependent evidence uses the current filtered delivery.
+
+
+
+### Implementation and worker protocol
+
+- `src/CohortExclusions.tsx`: import, preview, apply, restore and remaining-CIF export.
+
+- `src/core/cohort-exclusions.mjs`: pure exact-CIF ownership planning and unique-CIF export.
+
+- `cohort-preview` accepts a File/requestId; returns an opaque preview ID, source counts and exclusion summary.
+
+- `cohort-apply` requires the latest preview ID and no ambiguous CIFs. `cohort-restore` uses an empty exclusion set.
+
+- Worker builds a replacement result before swapping it in, emits `cohort-progress`, then `cohort-complete`; failures emit `cohort-error` and retain the prior population.
+
+- `cohort-export` uses the current result only. No network upload, API cleanup, account closure or persistent storage is introduced.
+
+- Rebuild cost is linear in source bytes plus existing aggregation/index costs. Keep work in the worker; never scan payment files on the UI thread.
+
+- Tests live in `tests/cohort-exclusions.test.mjs`. No new dependencies. Vite remains pinned to 8.3.4.
+
+
+
+## 29. Technical walkthrough: from source bytes to a screen
+
+### Build and runtime separation
+
+`npm run build` runs `tsc --noEmit` and then Vite. React components and the worker are bundled separately. The target is ES2022; browser APIs include File/Blob, Web Workers, TextDecoder, AbortController, crypto.randomUUID and object URLs. TypeScript uses strict mode, Bundler module resolution, React JSX and `allowJs`. Core `.mjs` is not universally checked with `checkJs`; a successful TypeScript build is not proof that every JavaScript business contract is typed.
+
+At runtime, Node is needed only when using the provided local server/development server. A compiled static deployment runs in the browser without a Node analysis backend. There is no ORM, SQL engine, dataframe package, remote AI service or chart service. Charts and presentation live in the React/CSS implementation; Excel parsing is the only specialized data-format dependency.
+
+### Fixed-width analysis path
+
+1. `AnalysisApp.start()` creates a new worker, replacing the old session. Files are structured-cloned as browser File objects, not uploaded to the static host.
+2. `modeInputs()` restricts a pre-deconversion run to Member and Consumer; full analysis retains the chosen mappings.
+3. `analyzeFiles()` validates duplicate layout assignments and orders dependencies before reading bytes. It drives `createAnalyzer()` through `begin`, `line`, and `finish`.
+4. Each File is read in 1 MiB slices. `lineFramer()` handles chunk-spanning records, newline boundaries and a final unterminated record. Its fixed carry prevents unbounded allocation for corrupt long lines.
+5. The parser validates exact width, allowed encoding, required fields and values, and retains only allowlisted fields. Invalid records contribute rejection evidence rather than partially trusted joins.
+6. Member registers customer keys; Consumer and Payee build safe aliases and relationship/funding indexes. Payment and history rows resolve against those indexes. Maps/Sets replace repeated full-file joins.
+7. Aggregation updates counts, integer-money totals, account-payment evidence, recurring candidates and duplicate-group evidence. `finish()` produces arrays for exploration plus private indexes for future requests.
+8. Optional segmentation attaches workbook assignments to existing customer profiles. It does not classify customers by recomputing payment/date rules from the deconversion rows.
+9. `summary()` sends lightweight dashboard data. `explore` requests fetch only the current page/context. Full JSON export uses `publicResult()` and can be substantially larger than the initial summary.
+
+### Payment detail is a separate read path
+
+The application intentionally does not keep every raw payment row. A Payments request rescans selected Single/Recurring/History files, reparses them, resolves customer/payee/funding context, applies filters and returns a page. New requests abort older scans. This controls retained raw-row memory but means repeated payment searches perform repeated I/O.
+
+When adding an exclusion or new parser field, update and test **both** the initial aggregate path and the payment rescan path. Otherwise a total may be correct while excluded/stale records reappear in drill-down. `_excludedCustomerKeys` is checked during the latter path.
+
+### Public versus private shapes
+
+| Object | Important contents | Contract |
+| --- | --- | --- |
+| Customer | key, member IDs, CIF strings, source evidence, account/payee/payment counts, segment | One Member master profile; may have several CIF aliases |
+| Funding row | customerKey, reference, number, type, role, source | Consumer row, not necessarily a distinct account |
+| Payee relationship | customerKey, relationship, name, account, duplicate metadata | Distinct relationship key; repeated source rows tracked |
+| Duplicate group | customerKey, relationship keys, size, extraCopies | Candidate group within one customer |
+| Closed result row | supplied CIF/account, match status, customer/segment, post, payment evidence | Unique input pair; filters never change whole-input post count |
+| Driver preview | retained and exclusion CIF sets, reconciliation summary, preview ID | Immutable reviewed population until inputs/criteria change |
+| Exclusion plan | original customer-key set plus requested matches/unknown/ambiguous counts | A CIF is a selector for a whole profile, not a new customer key |
+
+These are explanatory contracts, not exported TypeScript interfaces. Read actual constructors before changing field names. Money values crossing serialization boundaries are decimal minor-unit strings. UI formatting is separate from reconciliation arithmetic.
+
+## 30. Session lifecycle and invalidation contracts
+
+The worker owns the heavy data. React owns navigation, selected inputs, display state and pending request IDs.
+
+| Worker state | Why it exists | Lifetime |
+| --- | --- | --- |
+| `inputs` | Browser File references for reads/rescans/rebuilds | Current selected delivery |
+| `result` | Current aggregate arrays and private indexes | Replaced on analysis or successful exclusion/restore |
+| `segmentationReference` | Full workbook assignments and definitions | Survives Go/No-Go rebuild; reset for a new delivery |
+| `baseline` | Original customer profiles, identity index and mode | Supports cumulative exact ownership and restoration |
+| `excludedKeys` | Applied customer-key set | Cumulative until restore/new session |
+| `exclusionPreview` | Most recently reviewed exclusion plan and opaque ID | Invalidated after apply/restore/new analysis |
+| `closedAnalysis` | Separate closed-file result | Cleared after delivery population changes |
+| `builderPreview` | Reviewed Finacle extract and group sets | Invalidated on new builder run/population changes |
+| `queryAbort` | Cancels stale payment scans | Replaced by newer exploration/rebuild |
+| `builderGeneration`, `cohortRevision` | Reject stale asynchronous results | Changed with relevant analysis/rebuild operations |
+
+### Go/No-Go transactional rebuild
+
+The worker previews CIF ownership against the original baseline, not the already filtered array. This makes repeated lists predictable and allows a second CIF alias to refer to a profile already excluded. Applying a valid preview computes a replacement result using the original File objects and baseline identity. It then reapplies mode and segmentation, swaps results, increments the revision and clears dependent reports. A failed rebuild leaves the previous result in place.
+
+The original identity index retains excluded owners. Removing an owner from an alias map could make a previously ambiguous source row appear unambiguous and attach it to the wrong remaining customer. `identifyMaster()` preserves deterministic master keys during rebuild, while source joins use the unchanged baseline evidence.
+
+React resets customer/detail/list state on `cohort-complete`. ClosedAccounts and DriverBuilder are remounted using the new revision, preventing stale previews/downloads. The exclusion page stays mounted during rebuild so it can show progress/completion. Preserve this lifecycle if introducing a global loading screen.
+
+### Concurrency boundaries
+
+Worker message handlers are asynchronous; a worker does not make separate awaited operations atomic automatically. Existing rebuild guards, request IDs, aborts and generation checks cover particular paths. Do not assume every possible future interleaving is protected. For a new asynchronous feature, define which session/revision it belongs to, when results are discarded, and which previews/exports become stale. Add out-of-order response tests when changing those paths.
+
+## 31. Worked population examples for future maintainers
+
+All identifiers below are synthetic explanatory values, not production records.
+
+### Segment versus delivery versus driver
+
+DNA assigns CIFs `0001`, `0002`, `0003` to Segment 3. The delivery has profiles for `0001` and `0002`; Finacle contains `0002`, `0003`, `0004`.
+
+- Overview Segment 3: two delivery profiles.
+- Builder Segment 3 exclusions: two driver CIFs (`0002`, `0003`).
+- `0001` is outside Finacle and cannot be removed from that driver.
+- `0003` is outside the delivery but validly excluded using the full workbook.
+- `0004` stays unless another selected criterion removes it. Workbook absence alone is not current UNMATCHED eligibility.
+
+### Closed pair count versus driver exclusion count
+
+Closed input contains `(A,0001)`, `(B,0001)`, `(C,0002)` and all qualify for the chosen outcome. That is three unique account/CIF pairs but only two CIFs. If only `0001` is in Finacle, closed exclusions are one driver CIF. If `0001` also matches a selected segment, closed-only is zero and both-criteria is one. It is removed once.
+
+### Go/No-Go does not edit the Finacle input
+
+A Member profile has CIF aliases `0001` and `0009`, two accounts and three payees. Excluding `0009` removes the entire profile and its reliably linked records from the delivery analysis; both aliases disappear from remaining-delivery exports. The original Member/Consumer files and full DNA workbook remain unchanged. The separately supplied Finacle file is not rewritten. If Driver File Builder is rerun, its normal selected rules still govern its export; Go/No-Go is not an automatic additional Finacle exclusion criterion.
+
+### Source rows versus account counts
+
+Three Consumer rows may describe accounts A, A and B. Overview funding rows is three; distinct known accounts for Post Removal is two. Closing A leaves one distinct account even if its row appeared twice. Never subtract closed-row count from Consumer-row count.
+
+## 32. Enhancement recipes and regression checklist
+
+### Add a customer column or filter
+
+Identify the correct aggregation unit first. Add the value in the core customer construction/finalization, expose it through `pageEntities`, and update the customer table. For a filter, apply it before paging. For a numeric sort, extend the allowlisted sort-value map and compare money with BigInt. Decide whether existing facet counts should describe the population before or after the new filter. Verify combined search, segment, duplicate bucket and return navigation.
+
+### Add a new source field or layout
+
+Require source evidence and document printed versus derived positions. Update the catalog, parser allowlist/validation, core consumer, exploration path and synthetic fixtures. Do not retain sensitive fields merely because the layout contains them. Check total record width and unaffected offsets. A new layout must also be considered in ordering, coverage, filename/manual mapping, pre-deconversion gating and Go/No-Go ownership handling.
+
+### Add an export
+
+Define its population in one sentence before coding: delivery profiles, unique CIFs, Finacle CIFs, closed pairs, or payment rows. Define field order, headers, duplicate policy, ordering, leading zeros, line endings and empty-result handling. Build it from the same filtered core population as its preview, across all pages. Use a local Blob download; do not add an upload service. If it depends on a preview, validate its snapshot ID at export time.
+
+### Change a population or exclusion rule
+
+Inspect `segmentation.mjs`, `driver-builder.mjs`, `cohort-exclusions.mjs`, `closed-accounts.mjs` and worker invalidation together. These solve different problems. Keep named segment full-workbook matching, current-delivery UNMATCHED, distinct account/CIF outcomes and whole-customer Go/No-Go removal separate. Update reconciliation text/examples as well as totals. Do not silently change the business rule to make a screenshot count agree.
+
+### Minimum regression cases to select from
+
+- Identifier `0001` is distinct from `1`.
+- Repeated Member rows do not add customers; Consumer rows do not create master customers.
+- Multiple aliases, shared CIFs, conflicting sponsor/member evidence and unknown CIFs remain explicit.
+- Same account number on different customers does not cross-match.
+- Duplicate groups use largest group size rather than summed duplicates.
+- Models-only, instances with blank frequency, invalid recurring identifiers and history-only evidence.
+- Missing/rejected payment files cannot become a false no-payments claim.
+- Multiple closed accounts and repeated input pairs do not double-subtract; filtered post counts stay unchanged.
+- Full-workbook outside-delivery CIFs, outside-driver CIFs and selected-rule overlaps.
+- Finacle CIFs outside the current-delivery UNMATCHED set remain retained.
+- Full and pre-deconversion modes; cumulative Go/No-Go exclusions and restore.
+- Payment rescans and exports cannot reintroduce excluded linked records.
+- Downloads cover the entire selected population, not just the first 100 rows.
+
+Use `npm run build` then `npm test` on a fresh extraction. For an existing built workspace, `npm run check` runs tests then build. Run native `npm audit --package-lock-only` before a release, reporting actual findings rather than assuming pinned versions are safe. Use synthetic browser fixtures for navigation/download changes and inspect exported bytes. This README update itself did not rerun application tests because no runtime files changed; v0.16.0 results are recorded prior evidence.
+
+## 33. Handoff acceptance and remaining unknowns
+
+A successor should be able to locate a requested screen, trace its worker message to a core module, identify the population/ownership contract, implement a bounded change and verify it without production files. Start by asking for the exact desired behavior and examples only when source/tests do not establish it; avoid requesting real customer records.
+
+The following remain limitations rather than promises of future implementation:
+
+- Vendor approval/current applicability of the historic layout evidence is unknown.
+- Standalone nickname ownership and recurring Rule DB production linkage are unconfirmed.
+- Source inventory is not a live FIS/Finacle status query; payment presence is supplied evidence, not confirmed active status or settlement.
+- The custom API cleanup batch is outside this source tree.
+- Input/aggregate memory limits remain browser-dependent; workbook parsing is fully in memory.
+- No persisted sessions, automatic restore after browser restart, database, authentication service or background job scheduler exists.
+- Worker payloads use several `any` types and an implicit initial-analysis fallback. Fully typed messages would be a separate improvement.
+- Production/Mac performance and all race interleavings are not proven by local Windows synthetic tests.
+
+Keep README, VALIDATION.md and package version consistent. Historical ZIPs are immutable snapshots; editing this README does not update them. When the user requests a new development package, include this current README and inspect the archive contents using section 20. For documentation-only delivery, link this file directly and do not imply a new runtime release.
