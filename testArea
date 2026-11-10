@@ -31,3 +31,28 @@ What is required: nothing in the address. In the V11 schema the creditor agent i
 One thing for your addendum task: the mapper reads only the payment object. It does not read the addendum. So an address that exists only in the addendum will not reach pain.001 today. Either it gets copied into payeeBank.address before the call to Wire Rail II, or we extend Wire Rail II to take the addendum. Worth a quick chat so we pick one.
 
 Code: in bank-wire-object-mapper, the creditor agent is built from payload.getPayeeBank() in CreditTransferBuilder, the agent fields are in AgentMapper.agent(...), and the address fields are in PostalAddressMapper.map(...). I am moving the mapping to MapStruct this week; after that it is all in one file, mappers/WireCreditTransferPain001V11, methods toFinancialInstitution and toPostalAddress.
+
+
+SDPPayload                              pain.001.001.11
+  payeeBank                    ->       CdtTrfTxInf/CdtrAgt/FinInstnId
+    bankCode                   ->         ClrSysMmbId/MmbId
+    bankName                   ->         Nm
+    address                    ->         PstlAdr
+      streetName               ->           StrtNm
+      city                     ->           TwnNm
+      postalCode               ->           PstCd
+      countryCode              ->           Ctry
+
+
+<CdtrAgt>
+  <FinInstnId>
+    <ClrSysMmbId><ClrSysId><Cd>USABA</Cd></ClrSysId><MmbId>322070381</MmbId></ClrSysMmbId>
+    <PstlAdr>
+      <StrtNm>CdAgt_Avenue of the Fountains</StrtNm>
+      <PstCd>89158</PstCd>
+      <TwnNm>CdAgt_Fountain Hills</TwnNm>
+      <CtrySubDvsn>AZ</CtrySubDvsn>
+      <Ctry>US</Ctry>
+    </PstlAdr>
+  </FinInstnId>
+</CdtrAgt>
