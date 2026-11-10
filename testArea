@@ -1,9 +1,43 @@
-Hey Claude, okay, so we want to build something interesting, a cool app for my Apple Watch. I think this is the Apple Watch Pro, I feel like, yeah, the Ultra model.
+Title: Fix the Jenkins pipeline so bank-wire-object-mapper publishes to Artifactory maven-internal-facing and the Bank Wire Rail II API can consume it
 
-What I want to build is, I'm not sure whether I have to enable developer mode or all these things, but I want to build one app. It is like a timer, but it's kind of a bomb, meaning it has to have an actual bomb graphic. I should be able to set a timer. By clicking on that, I should be able to change the timer in minutes, okay, so one minute, two, and so on. By clicking on it, I should be able to set the timer even for two hours or something like that.
+Story points: 3
 
-Once I do it and start the timer, I should be able to pause it as well. But the thing is the bomb icon. Meaning, the bomb would be lit. It's a kind of Acme or cartoonish bomb. It will be lit, and then as the timer decreases, the light is also going to decrease. When it reaches the end of the timer, it's going to blast. Yeah, you should have the blast experience, kind of. But I should have a vibration as well in my hand. I don't need a sound, but I just need to know, okay, some good, big vibration of things, hey, the timer is done.
+User story
+As a developer on the Bank Wire Rail II API, I want the pipeline of the mapping library to publish its jar to Artifactory maven-internal-facing, so that the API declares the library as a normal dependency and downloads it in local and pipeline builds, with no copied jar or copied source.
 
-So this is the thing I want to build, but I have to have a very rich UI, okay. It has to be a really good, very well polished, very rich UI, like how it comes from a bigger enterprise, okay. Look for the best design system with respect to the user interaction and all those things, and design it accordingly. The animation has to be top notch here, okay. And be efficient as well, as you're building this for the watch.
+Description
+bank-wire-object-mapper is the library that converts the PayX payment object to pain.001.001.11. The Bank Wire Rail II API has to call it, so the API needs the library as a versioned dependency from Artifactory. Today the Jenkins pipeline of the library does not deliver the jar to maven-internal-facing, so the API cannot resolve it.
 
-Tell me how we can achieve this, how we can go ahead and build this and get it running on my watch. Thanks.
+This story finds why the publish does not happen, fixes the pipeline configuration and the Gradle publishing setup of the library, and proves the result by resolving the jar from the Bank Wire Rail II API.
+
+In scope
+- Pipeline configuration of the library repository: library build with Gradle on JDK 21, tests, and a publish step that targets maven-internal-facing
+- Gradle publishing setup of the library: group, artifact id, version, pom, sources jar, and the publish target expected by the pipeline
+- Published content: the generated pain.001.001.11 classes are inside the jar; the pom carries payx-payload with the jackson-databind exclusion; the local stand-in payload module is not published
+- Versioning rule: snapshot versions from the development branch, release versions from the main branch
+- Dependency declaration in the Bank Wire Rail II API and a successful build that downloads the jar
+
+Out of scope
+- Calling the mapper from the request flow of the API, which is covered by its own story
+- Any change to the mapping itself
+
+Acceptance criteria
+[ ] Cause of the missing or failing publish step is identified and noted on this story
+[ ] Pipeline build of bank-wire-object-mapper on the development branch is green, including the unit tests
+[ ] Jar, pom and sources jar are visible in Artifactory maven-internal-facing under the agreed group, artifact id and version
+[ ] Published pom lists payx-payload with the jackson-databind exclusion and has no reference to the local stand-in payload module
+[ ] Bank Wire Rail II API declares the library as a dependency and resolves it from Artifactory in a local build and in its pipeline build
+[ ] A class of the API compiles against a mapper class with no jar or mapper source checked into the API repository
+[ ] Dependency coordinates and the versioning rule are documented in the README of the library
+
+Technical notes
+- Coordinates today: group com.capitalone.bank, artifact bank-wire-object-mapper. Confirm the group against the team standard before the first publish, since a published coordinate is hard to change.
+- The Gradle build applies maven-publish and defines a publication, but it names no target repository. Check whether the pipeline supplies the target or the build must declare it.
+- The build generates the pain.001.001.11 classes with xjc and uses MapStruct as an annotation processor. Both must resolve from Artifactory on the pipeline agent.
+- The pipeline identity needs deploy permission on maven-internal-facing for this group.
+- Dependency in the API (Gradle): implementation 'com.capitalone.bank:bank-wire-object-mapper:<version>'
+- Dependency in the API (Maven): groupId com.capitalone.bank, artifactId bank-wire-object-mapper, version <version>
+
+Dependencies
+- The MapStruct version of the mapper is merged to the development branch of the library
+- Access to the pipeline configuration of both repositories
