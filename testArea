@@ -1,58 +1,43 @@
-Hi Gauthami, payeeBank.address is mapped, it is not a todo. The summary table only said "agent rule" for the creditor agent and did not spell the address out, so I can see why it looked missing. I have added the rows to the README.
+Title: Finalize the asynchronous design for Wire Rail II and update the ADRs for approval
 
-Payee bank to pain.001 V11 (CdtTrfTxInf/CdtrAgt):
-- payeeBank.swiftBankIdentifierCode -> FinInstnId/BICFI
-- payeeBank.bankSystemIdentifier + payeeBank.bankCode -> FinInstnId/ClrSysMmbId (ClrSysId/Cd + MmbId; a 9-digit code with no system id is treated as USABA)
-- payeeBank.legalEntityIdentifier -> FinInstnId/LEI
-- payeeBank.bankName -> FinInstnId/Nm
-- payeeBank.address -> FinInstnId/PstlAdr
-- payeeBank.bankAccountNumber -> CdtrAgtAcct/Id/Othr/Id
+Story points: 3
 
-Address fields (same rule for every party and agent address):
-- department -> Dept (70)
-- subDepartment -> SubDept (70)
-- streetName -> StrtNm (70)
-- buildingNumber -> BldgNb (16)
-- buildingName -> BldgNm (35)
-- floor -> Flr (70)
-- postalBox -> PstBx (16)
-- room -> Room (70)
-- postalCode -> PstCd (16)
-- city, else townName -> TwnNm (35)
-- townLocationName -> TwnLctnNm (35)
-- districtName -> DstrctNm (35)
-- stateCode, else stateProvince -> CtrySubDvsn (35)
-- countryCode -> Ctry (2 letters)
-- addressLine1 to addressLine4 -> AdrLine (70 each)
-Not read: countryName, proxyAccountIdentification.
+User story
+As the team building Wire Rail II, I want the asynchronous design between the PayX integration service, Wire Rail II and the OPF API decided, written into the ADRs and approved, so that the build of the queuing, the submission service and the status callback starts from one agreed design.
 
-What is required: nothing in the address. In the V11 schema the creditor agent is optional, and inside it BICFI, ClrSysMmbId, LEI, Nm and PstlAdr are all optional, as is every address field. The mapper writes PstlAdr only when the address has at least one value, and does not fail when it is empty. In the FIS sample requests the creditor agent is just the USABA member id for bank and customer transfers; only the drawdown sample carries a structured address on it (department, subDepartment, streetName, buildingNumber, postCode, townName, countrySubDivision, country). Whether OPF requires an agent address per rail is still an open question with FIS.
+Background
+The architecture review moved the path from Payment Exchange to OPF from synchronous to asynchronous. OPF is an external API with unknown latency, and it can be down for hours, so a synchronous call from the PayX integration service through Wire Rail II to OPF carries operational risk.
 
-One thing for your addendum task: the mapper reads only the payment object. It does not read the addendum. So an address that exists only in the addendum will not reach pain.001 today. Either it gets copied into payeeBank.address before the call to Wire Rail II, or we extend Wire Rail II to take the addendum. Worth a quick chat so we pick one.
+The agreed direction:
+- The PayX integration service calls the Wire Rail II API. The API validates the payment, stores it and returns as soon as it is accepted.
+- A separate submission service picks the payment up, converts it to the format OPF requires, detokenises the sensitive data, posts it to the OPF API and records the final status.
+- The submission service then calls the PayX callback API, which updates the payment status in Payment Exchange.
+- Wire Rail II and its data store stay independent of OPF, so a later phase can add another submission service for correspondent banks, Fed or SWIFT without changing the intake.
 
-Code: in bank-wire-object-mapper, the creditor agent is built from payload.getPayeeBank() in CreditTransferBuilder, the agent fields are in AgentMapper.agent(...), and the address fields are in PostalAddressMapper.map(...). I am moving the mapping to MapStruct this week; after that it is all in one file, mappers/WireCreditTransferPain001V11, methods toFinancialInstitution and toPostalAddress.
+The architecture leads agree with the asynchronous flow. The mechanics are not decided. This story decides them, documents them and gets them approved. It contains no build work.
 
+Design points to settle
+- Queuing mechanism between the API and the submission service: DynamoDB Streams, SQS with a dead-letter queue, or another pattern. Judge each against regional failover, visibility timeout limits, exponential back-off and an OPF outage of several hours.
+- Retries: from the integration service to the Wire Rail II API, and from the submission service to OPF. Limits, back-off, and what happens when retries are exhausted.
+- Where the pain.001.001.11 conversion, the OPF JSON conversion and the detokenisation live.
+- What is stored: the original payment object, the converted messages, the status and the OPF response. Key, writers (insert by the API, update by the submission service), and which fields stay tokenised.
+- Response of the Wire Rail II API once a payment is accepted, and the contract and status values of the callback to Payment Exchange.
+- Duplicate handling when a payment is replayed.
+- Behaviour when a region fails over with payments still waiting.
 
-SDPPayload                              pain.001.001.11
-  payeeBank                    ->       CdtTrfTxInf/CdtrAgt/FinInstnId
-    bankCode                   ->         ClrSysMmbId/MmbId
-    bankName                   ->         Nm
-    address                    ->         PstlAdr
-      streetName               ->           StrtNm
-      city                     ->           TwnNm
-      postalCode               ->           PstCd
-      countryCode              ->           Ctry
+Acceptance criteria
+[ ] Queuing options are compared against regional failover, back-off and a multi-hour OPF outage, with one recommended and the reason recorded
+[ ] Component and sequence diagrams show intake, storage, submission to OPF, status update and callback to Payment Exchange, including the failure and retry paths
+[ ] Data store design is documented: stored items, key, writers, tokenised fields and status values
+[ ] Wire Rail II API response and the callback contract are agreed with the pod that builds the PayX integration service and the callback API
+[ ] ADR pages for the Wire Rail II integration, the submission to OPF and the OPF API connection, and the Phase 1 interim architecture diagram, describe the asynchronous design, with the synchronous wording removed or marked superseded
+[ ] Design is reviewed in the squad working session and approval from the architecture leads is recorded on the ADR pages
+[ ] Build stories that follow from the design are created, and existing stories that change are reworded or listed
 
+Out of scope
+- Building the queuing, the submission service or the callback
+- Rewording the product requirement documents, which the product owners handle
 
-<CdtrAgt>
-  <FinInstnId>
-    <ClrSysMmbId><ClrSysId><Cd>USABA</Cd></ClrSysId><MmbId>322070381</MmbId></ClrSysMmbId>
-    <PstlAdr>
-      <StrtNm>CdAgt_Avenue of the Fountains</StrtNm>
-      <PstCd>89158</PstCd>
-      <TwnNm>CdAgt_Fountain Hills</TwnNm>
-      <CtrySubDvsn>AZ</CtrySubDvsn>
-      <Ctry>US</Ctry>
-    </PstlAdr>
-  </FinInstnId>
-</CdtrAgt>
+Dependencies
+- Working session with the squad to review the options
+- Availability of the architecture leads for the approval
