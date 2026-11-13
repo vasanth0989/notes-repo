@@ -1,43 +1,8 @@
-Title: Finalize the asynchronous design for Wire Rail II and update the ADRs for approval
+Key learnings from CPE/Nauma for the next scale wave:
 
-Story points: 3
+- **Joint-owner coverage:** DNA segmentation included primary owners but missed joint owners with independent bill-pay profiles. Include both to resolve unmatched CIFs and reconcile population counts.
+- **Fallout reconciliation:** Three CIFs were missed in our CPE fallout report but identified downstream because joint-owner CIFs were absent from the Finacle report. Update that logic before preparing the final post-go/no-go driver.
+- **Check-payment timing:** Proactively identify potential check payments and confirm processing/delivery timelines with FIS, including the approximately four-day delay observed, so customer expectations reflect the downstream processing timeline.
+- **Earlier FIS handoff:** Retain the move from **MD-8 to MD-9** for the initial driver submission, giving FIS additional preparation time and targeting receipt of the actual driver file by **Monday morning, MD-5**.
 
-User story
-As the team building Wire Rail II, I want the asynchronous design between the PayX integration service, Wire Rail II and the OPF API decided, written into the ADRs and approved, so that the build of the queuing, the submission service and the status callback starts from one agreed design.
-
-Background
-The architecture review moved the path from Payment Exchange to OPF from synchronous to asynchronous. OPF is an external API with unknown latency, and it can be down for hours, so a synchronous call from the PayX integration service through Wire Rail II to OPF carries operational risk.
-
-The agreed direction:
-- The PayX integration service calls the Wire Rail II API. The API validates the payment, stores it and returns as soon as it is accepted.
-- A separate submission service picks the payment up, converts it to the format OPF requires, detokenises the sensitive data, posts it to the OPF API and records the final status.
-- The submission service then calls the PayX callback API, which updates the payment status in Payment Exchange.
-- Wire Rail II and its data store stay independent of OPF, so a later phase can add another submission service for correspondent banks, Fed or SWIFT without changing the intake.
-
-The architecture leads agree with the asynchronous flow. The mechanics are not decided. This story decides them, documents them and gets them approved. It contains no build work.
-
-Design points to settle
-- Queuing mechanism between the API and the submission service: DynamoDB Streams, SQS with a dead-letter queue, or another pattern. Judge each against regional failover, visibility timeout limits, exponential back-off and an OPF outage of several hours.
-- Retries: from the integration service to the Wire Rail II API, and from the submission service to OPF. Limits, back-off, and what happens when retries are exhausted.
-- Where the pain.001.001.11 conversion, the OPF JSON conversion and the detokenisation live.
-- What is stored: the original payment object, the converted messages, the status and the OPF response. Key, writers (insert by the API, update by the submission service), and which fields stay tokenised.
-- Response of the Wire Rail II API once a payment is accepted, and the contract and status values of the callback to Payment Exchange.
-- Duplicate handling when a payment is replayed.
-- Behaviour when a region fails over with payments still waiting.
-
-Acceptance criteria
-[ ] Queuing options are compared against regional failover, back-off and a multi-hour OPF outage, with one recommended and the reason recorded
-[ ] Component and sequence diagrams show intake, storage, submission to OPF, status update and callback to Payment Exchange, including the failure and retry paths
-[ ] Data store design is documented: stored items, key, writers, tokenised fields and status values
-[ ] Wire Rail II API response and the callback contract are agreed with the pod that builds the PayX integration service and the callback API
-[ ] ADR pages for the Wire Rail II integration, the submission to OPF and the OPF API connection, and the Phase 1 interim architecture diagram, describe the asynchronous design, with the synchronous wording removed or marked superseded
-[ ] Design is reviewed in the squad working session and approval from the architecture leads is recorded on the ADR pages
-[ ] Build stories that follow from the design are created, and existing stories that change are reworded or listed
-
-Out of scope
-- Building the queuing, the submission service or the callback
-- Rewording the product requirement documents, which the product owners handle
-
-Dependencies
-- Working session with the squad to review the options
-- Availability of the architecture leads for the approval
+**End-to-end flow:** Prepare the Finacle CIF population → apply segmentation and closed-account exclusions → send the initial driver to FIS → reconcile returned customer/funding files and analyze the full deconversion delivery → remove migration fallouts after go/no-go approval → send the final driver for downstream migration.
