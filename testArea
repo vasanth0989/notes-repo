@@ -1,8 +1,263 @@
-Key learnings from CPE/Nauma for the next scale wave:
+# Wire Rail II: how a payment gets from the intake API to the OPF submission
 
-- **Joint-owner coverage:** DNA segmentation included primary owners but missed joint owners with independent bill-pay profiles. Include both to resolve unmatched CIFs and reconcile population counts.
-- **Fallout reconciliation:** Three CIFs were missed in our CPE fallout report but identified downstream because joint-owner CIFs were absent from the Finacle report. Update that logic before preparing the final post-go/no-go driver.
-- **Check-payment timing:** Proactively identify potential check payments and confirm processing/delivery timelines with FIS, including the approximately four-day delay observed, so customer expectations reflect the downstream processing timeline.
-- **Earlier FIS handoff:** Retain the move from **MD-8 to MD-9** for the initial driver submission, giving FIS additional preparation time and targeting receipt of the actual driver file by **Monday morning, MD-5**.
+Options evaluated, and the one we propose.
 
-**End-to-end flow:** Prepare the Finacle CIF population → apply segmentation and closed-account exclusions → send the initial driver to FIS → reconcile returned customer/funding files and analyze the full deconversion delivery → remove migration fallouts after go/no-go approval → send the final driver for downstream migration.
+## 1. The decision in one paragraph
+
+The flow is agreed: the Wire Rail II API accepts a payment and returns, a separate submission service sends it to the OPF API, and a callback tells Payment Exchange the outcome. What is not agreed is the mechanism between "accepted" and "submitted": what holds the payment, what wakes the submission service, and what retries when OPF is slow or down.
+
+**We propose that the DynamoDB table is the queue.** The record the API writes is the unit of work. It carries its own status, its attempt count and the time of its next attempt. The submission service finds due records through a small index, claims one with a conditional write, submits it, and writes the result back. No separate queue sits between the two services. DynamoDB Streams or a queue can be added later as a faster wake-up, and nothing in the state logic changes when they are.
+
+The short reason: every option needs this table and this state logic anyway, to know the status of each wire and to survive the loss of a region. A queue in front of it removes none of that work and adds a second place where the state of a payment lives.
+
+The submission service is not interim code. It is the part of the rail that stays when OPF goes, and later channels will reuse it. So the design is judged on whether it lasts: a new intake, a new channel and more load must each be an addition, not a redesign.
+
+## 2. What the mechanism has to do
+
+These are the requirements the reviews raised, plus the ones that follow from wires being wires and from the rail being permanent.
+
+| # | Requirement | Why it matters here |
+|---|---|---|
+| R1 | Nothing accepted is ever lost | The API has told Payment Exchange "accepted". From then on the rail owns the wire. |
+| R2 | Survive an OPF outage of several hours | OPF is an external API. Payments must wait and then drain on their own. |
+| R3 | Back off, and do not hammer a vendor that is down | Exponential back-off per payment, and one probe instead of a retry storm. |
+| R4 | Survive the loss of a region | Payments waiting in the failed region must be picked up in the other one. |
+| R5 | Never create a duplicate wire | Retries, replays from Payment Exchange and two regions must not send the same wire twice. |
+| R6 | Always know where each wire is | Operations must be able to list what is waiting, why, and since when, and replay one. |
+| R7 | Stop waiting at some point | A wire has a value date and a cut-off. Past a deadline it must be escalated, not retried forever. |
+| R8 | Stay independent of the channel | A later phase adds correspondent banks, Fed or SWIFT without changing the intake. |
+| R9 | Stay independent of the intake | Today the intake is an API call. Later it may be an event stream. The work after "accepted" must not care. |
+| R10 | Grow without a redesign | More wires, more workers and more channels are handled by adding capacity or configuration. |
+
+What weighs most for a wire is durability, recoverability and visibility. A wire that is late is a problem. A wire that is lost or sent twice is an incident. The options are judged on those first, and on growth second.
+
+Two existing safety nets also matter:
+- **The FIS idempotency key.** Every call to OPF carries a key that must be the same on a retry. We use the UETR. A repeated call with the same key is treated by FIS as a retry, not as a new wire.
+- **The Payment Exchange replay.** If a stage does not complete within its service level, the Arbiter replays the previous stage with the same UETR, across regions.
+
+## 3. The options
+
+### Option A: SQS queue with a dead-letter queue
+
+The API writes the record, then puts a message on an SQS queue. The submission service polls the queue. A failed message becomes visible again after a delay and is retried. After a set number of receives it moves to a dead-letter queue.
+
+Good:
+- Managed, well known, and the pattern most teams reach for. Alarms on queue depth and on the dead-letter queue come almost for free.
+- Scales consumers easily, with queue depth as the scaling signal.
+
+Problems for this use:
+- **A queue lives in one region.** SQS does not replicate. If a region fails, the messages in its queue are unreachable until it returns. To meet R4 we would need a sweeper in the other region that finds accepted-but-not-submitted records in the table and submits them. When the failed region returns, its queue still holds those messages and its consumers process them again.
+- **Two writes that cannot be made atomic.** The record goes to DynamoDB and the message goes to SQS. If the second write fails, the payment is stored and never queued. The same sweeper is the fix.
+- **Back-off is bounded.** A message can stay hidden for at most 12 hours per receive, and can be delayed at most 15 minutes on send. Back-off is done by changing the visibility timeout on each failure. It works, but every failed attempt counts toward the dead-letter threshold, so a long outage either fills the dead-letter queue or forces a very high threshold.
+- **Two sources of truth.** The message says "to do", the record says the status. They can disagree, and the consumer must always check the record before acting.
+- **A queue per channel.** Each new channel needs its own queue, dead-letter queue and routing.
+
+Verdict: workable, and our second choice. But once the sweeper and the status check exist, the queue is carrying nothing that the table does not already carry.
+
+### Option B: DynamoDB Streams as the trigger, on its own
+
+The API writes the record. DynamoDB emits a change event. A consumer, in practice a Lambda function, is invoked with the event and submits the payment.
+
+Good:
+- One write. No message to lose between the table and a queue.
+- Very fast on the normal path.
+
+Problems for this use:
+- **A stream is a trigger, not a retry scheduler.** A stream keeps its records for 24 hours. A failing batch is retried straight away, again and again, with no per-record delay. There is no "try this one again in 15 minutes".
+- **One bad record blocks the ones behind it** in the same shard, unless batches are split and failures are routed away. The failure destination receives a pointer to the record, not the record, so it must be read back within the same 24 hours.
+- **With a table replicated across regions, every region sees every change** in its own stream. Without a claim on the record, both regions would submit.
+- The natural consumer is Lambda. That is a new kind of compute for this rail, with its own proxy egress, secrets and detokenisation access. The Fargate service we are building anyway cannot consume a stream without extra client machinery.
+
+Verdict: good as a wake-up signal, not sufficient as the mechanism. It does not meet R2, R3 or R7 on its own.
+
+### Option C: the table is the queue (proposed)
+
+The record is the unit of work. The submission service polls a small index of due records, claims one with a conditional write, submits it and writes the outcome back. Section 5 describes it in detail.
+
+Good:
+- **One write, one source of truth.** Accepted means stored. Stored means it will be worked. There is no gap between the two.
+- **Back-off without a ceiling.** The next attempt time is a field. It can be seconds or hours away.
+- **Region failover is the same mechanism.** With the table replicated to both regions, the waiting payments are already in the surviving region. Its workers pick them up.
+- **Visibility is a query.** "What is waiting, since when, after how many attempts, with which last error" is a read of the index.
+- **The intake can change.** An API call or a stream consumer both end in the same conditional write. Nothing after it changes.
+- **A new channel is a value, not new infrastructure.** A second submission service reads the same table under its own queue name, with its own breaker.
+- **No new infrastructure to start.** The table exists. The worker runs inside the Fargate submission service.
+
+Problems:
+- **We own the scheduling code**: the claim, the lease, the back-off and the circuit breaker. It is a small state machine, but it is ours to get right, to test and to maintain for as long as the rail lives.
+- **Polling has known growing pains.** With many workers, several try to claim the same record and all but one fail. The normal path waits for the next poll. One channel's backlog can crowd the others. Each has a standard answer, set out in section 5, and each answer is more code we own.
+
+Verdict: meets every requirement with the fewest parts, and grows by configuration.
+
+### Option D: Step Functions, one workflow per payment
+
+The API starts a workflow for each payment. The workflow calls the submission step, with retry and back-off declared in the workflow definition, and can wait for up to a year.
+
+Good: back-off, waiting and a visual history per payment are built in. Failed runs can be redriven.
+
+Problems: a workflow lives in one region, so R4 has the same answer as SQS, a sweeper on the table. Starting the workflow is a second write after the record. A circuit breaker across all payments does not fit a per-payment workflow. It is a new platform for the team and must be an approved pattern.
+
+Verdict: elegant per payment, weak on region loss and on a vendor-wide outage.
+
+### Option E: a Kafka topic
+
+The API publishes to a topic and the submission service consumes it. Payment Exchange is itself built on an event stream, so the tooling exists.
+
+Problems: a failed record blocks its partition unless retry topics are built, one per delay tier. Hours of back-off mean several retry topics and consumers. Publishing after the record is again a second write. A topic is a good way for payments to arrive at the rail. It is a poor place to hold a payment that must wait for a vendor.
+
+Verdict: built for ordered, continuous flow. Waiting, back-off and a per-payment deadline work against its model.
+
+### Option F: stay synchronous and let Payment Exchange replay
+
+This is the design we are leaving. It is listed for completeness. The replay settings cover about an hour, the caller holds a connection open on an API whose latency we do not know, and a long outage turns into snagged payments that people must replay by hand. The architecture review has already ruled it out.
+
+## 4. Side by side
+
+| | A: SQS + dead-letter queue | B: Streams only | C: table is the queue | D: Step Functions | E: Kafka topic |
+|---|---|---|---|---|---|
+| R1 Nothing lost after "accepted" | Needs a sweeper for the write gap | Yes | Yes | Needs a sweeper | Needs an outbox |
+| R2 Hours-long outage | Yes, with care on the receive count | No, 24 hours and no delay | Yes | Yes | Only with retry topics |
+| R3 Back-off and no retry storm | Per message yes, vendor-wide no | No | Yes, both | Per payment yes, vendor-wide no | Awkward |
+| R4 Loss of a region | Stranded until a sweeper acts | Needs a claim | Yes, same mechanism | Stranded until a sweeper acts | Depends on the platform |
+| R5 No duplicates | Needs the status check | Needs a claim | Claim plus idempotency key | Needs the status check | Needs the status check |
+| R6 Visibility and replay | Queue depth, plus the table | Poor | One query | Good per payment | Lag metrics, plus the table |
+| R7 Deadline and escalation | In the consumer | No | A field on the record | In the workflow | In the consumer |
+| R8 New channel | New queue, dead-letter queue, routing | New consumer and filter | New queue value on the record | New workflow | New topics and retry topics |
+| R9 New intake | Intake must also enqueue | Unchanged | Unchanged | Intake must also start the workflow | Intake must also publish |
+| R10 Growth | Add consumers | Add shards, limited control | Add workers and index shards | Add executions, per-execution cost | Add partitions |
+| New parts to run | Queue, dead-letter queue, sweeper | Stream, Lambda | None | Workflow service, sweeper | Topics, retry topics |
+| Code we own | Consumer, back-off, sweeper, status check | Consumer, claim | Worker, claim, back-off, breaker | Workflow, steps, sweeper | Consumer, retry tiers, status check |
+
+## 5. How the proposed option works
+
+### State and dispatch are two things
+
+The design has two parts, and only one of them is a choice.
+
+- **State.** The record, its status, the conditional writes, the stored request, the deadline, the breaker and the sweep for stranded work. Every option needs all of it. This is most of the code, and it is the reusable part.
+- **Dispatch.** How a worker learns that a record is due. In the proposal this is a poll of the index.
+
+The worker reads from a work source behind one interface. Polling the index is the first implementation. A stream wake-up or a queue can be added as a second one without touching the state logic. So the proposal does not bet the rail on polling. It starts with the simplest dispatch that meets every requirement and leaves the faster ones open.
+
+### The record
+
+One item per payment, keyed by UETR. It holds the payment object as received with the sensitive fields tokenised, the status, the attempt count, the time of the next attempt, a lease (who is working it and until when), the region that accepted it, the deadline, and the last OPF response.
+
+A small index lists only the records that have work pending, ordered by the time the work is due. A record leaves the index when it is finished. The index holds the backlog, not the history, so its size follows what is waiting and not what has been processed.
+
+### The flow
+
+1. **Accept.** The API validates the payment and writes the record with a condition that the UETR does not exist yet. It returns "accepted". A replay of the same UETR finds the record and returns its current state.
+2. **Find.** Each submission worker asks the index for records that are due.
+3. **Claim.** The worker takes a record with a conditional write: only if it is still waiting and nobody holds a live lease. One worker wins. The others move on.
+4. **Convert and send.** The worker converts the payment to the OPF format, detokenises in memory, and posts it with the UETR as the idempotency key.
+5. **Record the outcome.**
+   - Accepted by OPF: status submitted, callback due.
+   - Rejected by OPF as invalid: status rejected, callback due. No retry.
+   - Timeout, connection failure, server error: next attempt time moves out by the back-off. The record stays in the index.
+   - Deadline passed: status expired, alert raised, callback due.
+6. **Call back.** The same loop delivers the callback to Payment Exchange, with its own attempts and back-off, since that call can fail too.
+
+### Back-off and a vendor outage
+
+Per payment: 5 seconds, 15 seconds, 45 seconds, 2 minutes, 5 minutes, then every 15 minutes, each with some random spread.
+
+Vendor-wide: after a run of failures the workers mark OPF as down in a shared control record. While it is down, one probe goes out per interval and the other payments are not attempted, so they do not burn attempts. When a probe succeeds the mark clears and the backlog drains at a limited rate. Both regions read the same mark. Each channel has its own mark, so one channel's outage does not stop another.
+
+### Loss of a region
+
+In normal running each region works the records it accepted. A record of the other region that is overdue by more than a few minutes may be claimed by anyone. So when a region fails, its waiting payments start moving in the other region without a switch being thrown.
+
+Two edge cases:
+- **A record accepted a moment before the region failed and not yet replicated.** Payment Exchange gets no outcome, the Arbiter replays the stage with the same UETR, and the surviving region accepts it.
+- **Both regions claim the same record during the replication delay.** Both send the same request with the same idempotency key. FIS treats the second as a retry.
+
+### Why duplicates cannot happen
+
+Three layers, each enough on its own in the normal case:
+1. The conditional write on accept: one record per UETR.
+2. The conditional claim: one worker per record per region.
+3. The FIS idempotency key: one wire per UETR at OPF.
+
+The third layer needs one rule from us: **a retry must send the same bytes.** FIS rejects a repeated key with a different payload. The converted request carries a creation time and message identifiers, so it must not be regenerated with a new clock on each attempt. We convert once, store the converted request with the record, still tokenised, and reuse it. This is also the answer to "do we store the converted message": yes, because retries need it.
+
+### How it grows
+
+| Growth | What changes | What does not |
+|---|---|---|
+| More wires | More worker tasks. The index key splits into shards by configuration, and each worker reads its shards. | The record, the claim, the flow |
+| More workers | Workers pick at random within a page of due records, so they rarely collide. A collision costs one failed conditional write. | The record, the claim, the flow |
+| Lower latency wanted | A stream wake-up tells workers a record is due at once. The poll remains as the safety net. | The record, the claim, the flow |
+| A new channel | A new queue value, a new submission service, its own breaker. | The intake, the table, the first channel |
+| A new intake | A consumer that does the same conditional write as the API. | Everything after "accepted" |
+
+When we would add a queue as a fast lane in front of the workers:
+- sustained load beyond what a handful of polling workers clear comfortably in a load test,
+- a latency target tighter than a poll with a stream wake-up can meet,
+- or a platform ruling that an in-house poller is not an approved pattern.
+
+In that case the table stays the source of truth, the queue carries first attempts, and the sweep and the back-off stay where they are. It is an addition, not a migration.
+
+## 6. Why this option stands out
+
+1. **It is the common core of every option.** A, D and E each need the table, the status check and a sweeper to meet R1, R4 and R5. Option C is that core without the extra layer. Choosing it does not close a door: if a queue is wanted later, it goes in front and the state logic stays as it is.
+2. **Region loss needs no special path.** The reviewers' main concern with SQS was payments stuck in a failed region. Here the waiting list is data, and the data is in both regions.
+3. **It handles the outage the way an operator would.** One probe, no storm, no attempts burned, automatic drain. A per-message retry mechanism cannot express "the vendor is down".
+4. **It is the most reusable shape.** The intake and the channel are both replaceable around a stable record. A new channel or a new intake touches one side and leaves the other alone. With a queue, each of those also means new infrastructure and routing.
+5. **It answers "where is my wire" directly.** The state of every waiting payment is one query, in one place, in both regions.
+6. **It adds nothing to run on day one.** No queue, no dead-letter queue, no function, no workflow service. The cost is code, in a service we are writing anyway.
+
+## 7. Where the proposal is weakest, and what we do about it
+
+| Weak point | Answer |
+|---|---|
+| We write and own the scheduler, for the life of the rail | Keep it to one small state machine behind conditional writes, behind one interface. Test it against the mock OPF returning errors for hours, with workers killed mid-call, in both regions. |
+| "A database is not a queue" | The objection is about contention, latency and fairness as load rises. Shards, random pick, a stream wake-up and a breaker per channel answer each. A load test sets the point at which a queue is added as a fast lane, and the design already has the seam for it. |
+| A short wait on the normal path | Acceptable for a wire that has already passed several asynchronous stages. A stream wake-up removes it. |
+| Cross-region double claim | Covered by the idempotency key, provided FIS confirms how long a key is remembered. |
+| It depends on a table replicated across regions | So does every other option, since they all need the status in both regions. This must be confirmed with the platform first. |
+| It is not the pattern the enterprise guidance suggested first | Option A is our fallback. The state logic is identical, so the fallback costs the queue and the sweeper, not a redesign. |
+
+## 8. Questions we expect, with answers
+
+**Why not SQS FIFO for exactly-once?** Its deduplication window is five minutes, a failed message blocks its group, and it is still regional. It solves none of R2 to R4.
+
+**Why not Streams with Lambda and a failure destination?** Retention is 24 hours, there is no delay between retries, a failing record holds up its shard, and the failure destination gets a pointer, not the payment.
+
+**Is this exactly-once?** No, and nothing is. It is at-least-once delivery to an idempotent receiver, which gives one wire per UETR.
+
+**What if a worker dies in the middle of a call?** Its lease runs out, another worker claims the record and sends the same stored request with the same key.
+
+**What stops a flood when OPF comes back?** The drain is rate limited and the attempts are spread randomly. We will ask FIS for their rate limit.
+
+**What if Payment Exchange replays while we are still retrying?** The API finds the record and answers "accepted, in progress". Nothing is queued twice.
+
+**Will it scale when the rail carries more than today?** Yes, in three steps that need no redesign: more workers, then index shards, then a queue as a fast lane. The table itself is not the limit. The limit of a poller is contention between workers, and shards remove it. We will confirm the headroom with a load test and publish the figure.
+
+**Does the index become a hot spot?** It holds only pending work, and its key is split into shards by configuration. A long outage grows the backlog, not the write rate, since waiting payments are not attempted while the breaker is open.
+
+**What if wires later arrive from an event stream instead of the API?** The consumer does the same conditional write. The stream's redelivery and the write condition together give one record per UETR. Nothing downstream changes.
+
+**What does a second channel cost?** A queue value, a submission service for that channel and its breaker. The intake and the first channel are untouched.
+
+**Where does the conversion live?** In the submission service, which keeps the intake independent of OPF. The mapping library is unchanged.
+
+**What about card data rules?** Only tokenised values are stored. The detokenised request exists in memory for the duration of the call and is never logged.
+
+## 9. What we need from the group
+
+1. **Platform:** can the table be replicated across both regions through the standard provisioning, and with which consistency? The strongly consistent mode needs a third region or a witness. Is an in-service poller an accepted pattern?
+2. **FIS:** how long is an idempotency key remembered, what comes back for a repeat with the same payload, what is the rate limit, and are there planned maintenance windows?
+3. **Product:** how long may a wire wait before it must be escalated, and who is alerted?
+4. **Pod 2:** the callback contract and status values, and the service level of the stage that waits for the callback.
+5. **Architecture:** agreement that the converted request is stored once and reused, whether the stream wake-up is wanted from day one, and the load the rail should be tested to.
+
+## 10. Figures to verify before approval
+
+These are AWS service limits as documented. Limits change, so each deserves a look at the current documentation.
+- SQS: 12 hours maximum visibility timeout per receive, 15 minutes maximum send delay, 14 days maximum retention, no cross-region replication.
+- DynamoDB Streams: 24 hours retention; with a replicated table each region's stream carries the replicated writes.
+- Lambda on a stream: the failure destination receives metadata about the failed batch, not the records.
+- Step Functions standard workflows: up to one year per execution, regional.
+- DynamoDB replicated tables: the strongly consistent mode requires three regions, or two plus a witness.
+- DynamoDB throughput per partition key, which sets when the index needs a further shard.
